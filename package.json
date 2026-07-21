@@ -1,6 +1,6 @@
 {
   "name": "turva-llms-txt-validator",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Validate a site's llms.txt structure: seven checks, pass/warn/fail, JSON output. Same checks as the hosted validator at turva.dev/llms-txt-validator.",
   "type": "module",
   "main": "./src/index.mjs",
