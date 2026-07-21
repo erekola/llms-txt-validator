@@ -18,13 +18,13 @@ Or run it without installing:
     llms-txt-validate example.com --json
     llms-txt-validate example.com --strict
 
-Exit codes: 0 valid (warnings allowed), 1 not valid (with --strict, warnings also exit 1), 2 fetch or input error. Only the target site's /llms.txt file is fetched over https, redirects are not followed (a redirect fails the first check), the fetch times out after 8 seconds and the read is capped at 256 KB. Nothing is stored.
+Exit codes: 0 valid (warnings allowed), 1 not valid (with --strict, warnings also exit 1), 2 fetch or input error. Only the target site's /llms.txt is fetched over https, following a redirect only to the same host or its www/apex twin (an off-site or unsafe redirect fails the first check), the fetch times out after 8 seconds and the read is capped at 256 KB. Nothing is stored.
 
 ## The seven checks
 
 | # | Check | fail | warn |
 |---|-------|------|------|
-| 1 | File exists at /llms.txt, HTTP 200 | non-200 or a redirect | |
+| 1 | File exists at /llms.txt, HTTP 200 (a same-site www/apex redirect is followed) | non-200, or an off-site or unsafe redirect | |
 | 2 | Response is plain text | body looks like HTML | content-type is not text/plain or text/markdown |
 | 3 | Starts with a single H1 title | first non-empty line is not a markdown H1 | |
 | 4 | Blockquote summary after the title | | missing one-line summary |
@@ -61,4 +61,4 @@ The llms.txt format is a plain text map of a site for AI agents: an H1 title, a 
 
 ## License
 
-MIT. Source at [codeberg.org/erekola/llms-txt-validator](https://codeberg.org/erekola/llms-txt-validator), mirrored at [github.com/erekola/llms-txt-validator](https://github.com/erekola/llms-txt-validator).
+MIT. Source at [codeberg.org/erekola/llms-txt-validator](https://codeberg.org/erekola/llms-txt-validator), mirrored at [github.com/erekola/llms-txt-validator](https://github.com/erekola/llms-txt-validator). Published to npm from GitHub Actions with provenance, a signed attestation of where and how the package was built, verifiable on the npm package page.

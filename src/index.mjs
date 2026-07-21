@@ -5,7 +5,7 @@
 // canonical: if the two ever disagree, the hosted one wins and this package
 // gets the fix.
 
-export const VERSION = "0.1.0";
+export const VERSION = "0.1.2";
 const UA = "turva-llms-txt-validator/" + VERSION + " (+https://turva.dev/llms-txt-validator)";
 
 export function normalizeHostInput(raw) {
@@ -32,57 +32,81 @@ export function isValidPublicHost(host) {
 export async function fetchLlmsTxt(host, opts = {}) {
   const timeoutMs = opts.timeoutMs ?? 8000;
   const cap = opts.cap ?? 262144;
-  const target = "https://" + host + "/llms.txt";
-  const res = await fetch(target, {
-    redirect: "manual",
-    signal: AbortSignal.timeout(timeoutMs),
-    headers: { "user-agent": opts.userAgent ?? UA, "accept": "text/plain, text/markdown;q=0.9, */*;q=0.1" }
-  });
-  if (res.status >= 300 && res.status < 400) {
-    return { redirect: true, status: res.status, location: res.headers.get("location") || "" };
-  }
-  let bytes = 0, truncated = false;
-  const chunks = [];
-  if (res.body) {
-    const reader = res.body.getReader();
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      bytes += value.length;
-      if (bytes > cap) {
-        truncated = true;
-        chunks.push(value.slice(0, value.length - (bytes - cap)));
-        bytes = cap;
-        await reader.cancel();
-        break;
-      }
-      chunks.push(value);
+  const reqApex = host.startsWith("www.") ? host.slice(4) : host;
+  let url = "https://" + host + "/llms.txt";
+  let redirectedFrom = null;
+  for (let hop = 0; ; hop++) {
+    const res = await fetch(url, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: { "user-agent": opts.userAgent ?? UA, "accept": "text/plain, text/markdown;q=0.9, */*;q=0.1" }
+    });
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get("location") || "";
+      if (!loc) return { redirect: true, reason: "no-location", status: res.status, location: "" };
+      if (hop >= 4) return { redirect: true, reason: "too-many", status: res.status, location: loc.slice(0, 120) };
+      let next;
+      try { next = new URL(loc, url); } catch { return { redirect: true, reason: "bad-location", status: res.status, location: loc.slice(0, 120) }; }
+      const safeTarget = next.protocol === "https:" && !next.port && !next.username && !next.password && isValidPublicHost(next.hostname);
+      const twin = (next.hostname.startsWith("www.") ? next.hostname.slice(4) : next.hostname) === reqApex;
+      if (!safeTarget) return { redirect: true, reason: "unsafe-target", status: res.status, location: next.href.slice(0, 120) };
+      if (!twin) return { redirect: true, reason: "off-host", status: res.status, location: next.href.slice(0, 120) };
+      if (!redirectedFrom) redirectedFrom = url;
+      url = next.href;
+      continue;
     }
+    let bytes = 0, truncated = false;
+    const chunks = [];
+    if (res.body) {
+      const reader = res.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.length;
+        if (bytes > cap) {
+          truncated = true;
+          chunks.push(value.slice(0, value.length - (bytes - cap)));
+          bytes = cap;
+          await reader.cancel();
+          break;
+        }
+        chunks.push(value);
+      }
+    }
+    const buf = new Uint8Array(bytes);
+    let o = 0;
+    for (const c of chunks) { buf.set(c, o); o += c.length; }
+    return {
+      status: res.status,
+      contentType: res.headers.get("content-type") || "",
+      text: new TextDecoder("utf-8").decode(buf),
+      bytes,
+      truncated,
+      redirectedFrom,
+      finalUrl: url
+    };
   }
-  const buf = new Uint8Array(bytes);
-  let o = 0;
-  for (const c of chunks) { buf.set(c, o); o += c.length; }
-  return {
-    status: res.status,
-    contentType: res.headers.get("content-type") || "",
-    text: new TextDecoder("utf-8").decode(buf),
-    bytes,
-    truncated
-  };
+}
+
+function redirectFailDetail(f) {
+  if (f.reason === "off-host") return "redirects to " + f.location + ", a different host; llms.txt is host-scoped, so validate that host directly";
+  if (f.reason === "unsafe-target") return "redirects to an unsupported target (" + f.location + "); only https redirects to the same site are followed";
+  if (f.reason === "too-many") return "too many redirects; the llms.txt is not served at a stable URL";
+  return "got a " + f.status + " redirect without a usable Location header";
 }
 
 export function validateLlmsTxt(f) {
   const checks = [];
   const add = (id, status, label, detail) => checks.push({ id, status, label, detail });
   if (f.redirect) {
-    add("http-status", "fail", "File exists at /llms.txt", "expected HTTP 200 at /llms.txt, got a " + f.status + " redirect" + (f.location ? " to " + f.location.slice(0, 120) : "") + "; llms.txt should be served directly");
+    add("http-status", "fail", "File exists at /llms.txt", redirectFailDetail(f));
     return checks;
   }
   if (f.status !== 200) {
     add("http-status", "fail", "File exists at /llms.txt", "expected HTTP 200, got " + f.status);
     return checks;
   }
-  add("http-status", "pass", "File exists at /llms.txt", "HTTP 200");
+  add("http-status", "pass", "File exists at /llms.txt", f.redirectedFrom ? "HTTP 200, followed a redirect from " + f.redirectedFrom + " to " + f.finalUrl : "HTTP 200");
   const ct = (f.contentType || "").toLowerCase();
   const looksHtml = /^\s*(<!doctype|<html|<head|<body)/i.test(f.text);
   if (looksHtml) {

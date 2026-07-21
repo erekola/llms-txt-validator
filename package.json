@@ -1,6 +1,6 @@
 {
   "name": "turva-llms-txt-validator",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Validate a site's llms.txt structure: seven checks, pass/warn/fail, JSON output. Same checks as the hosted validator at turva.dev/llms-txt-validator.",
   "type": "module",
   "main": "./src/index.mjs",
@@ -32,7 +32,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://codeberg.org/erekola/llms-txt-validator"
+    "url": "git+https://github.com/erekola/llms-txt-validator.git"
   },
   "homepage": "https://turva.dev/llms-txt-validator",
   "bugs": {

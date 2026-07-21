@@ -1,0 +1,32 @@
+name: publish
+
+# Publish to npm with provenance using npm Trusted Publishing (OIDC).
+# No NPM_TOKEN is stored: a short-lived credential is minted from GitHub's
+# OIDC token at publish time, and npm attaches a signed provenance attestation
+# automatically (public repo + public package). Requires npm >= 11.5.1, which
+# ships with Node 24, and a Trusted Publisher configured for this package on
+# npmjs.com (workflow filename must be exactly publish.yml).
+#
+# Triggers when a version tag is pushed, e.g. v0.1.3.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  id-token: write   # required: lets the job mint the OIDC token for npm
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      - run: npm ci
+      - run: npm test
+      - run: npm publish
