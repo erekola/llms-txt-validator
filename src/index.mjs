@@ -1,7 +1,7 @@
 // turva-llms-txt-validator: validate a site's llms.txt structure.
 // The checks mirror the hosted validator at https://turva.dev/llms-txt-validator,
 // which runs this same logic inside the turva.dev Cloudflare Worker
-// (https://codeberg.org/erekola/turva-worker). The hosted validator stays
+// (https://github.com/erekola/turva-worker). The hosted validator stays
 // canonical: if the two ever disagree, the hosted one wins and this package
 // gets the fix.
 
