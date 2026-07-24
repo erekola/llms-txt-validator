@@ -1,7 +1,7 @@
 {
   "name": "turva-llms-txt-validator",
-  "version": "0.1.3",
-  "description": "Validate a site's llms.txt structure: seven checks, pass/warn/fail, JSON output. Same checks as the hosted validator at turva.dev/llms-txt-validator.",
+  "version": "0.1.4",
+  "description": "Validate a site's llms.txt structure: eight checks, pass/warn/fail, JSON output. Same checks as the hosted validator at turva.dev/llms-txt-validator.",
   "type": "module",
   "main": "./src/index.mjs",
   "exports": "./src/index.mjs",
@@ -36,6 +36,6 @@
   },
   "homepage": "https://turva.dev/llms-txt-validator",
   "bugs": {
-    "url": "https://codeberg.org/erekola/llms-txt-validator/issues"
+    "url": "https://github.com/erekola/llms-txt-validator/issues"
   }
 }

@@ -5,7 +5,13 @@
 // canonical: if the two ever disagree, the hosted one wins and this package
 // gets the fix.
 
-export const VERSION = "0.1.2";
+import { readFileSync } from "node:fs";
+
+// Version comes from package.json so the two can never drift again
+// (0.1.1 and 0.1.3 both shipped with a stale hardcoded VERSION).
+export const VERSION = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8")
+).version;
 const UA = "turva-llms-txt-validator/" + VERSION + " (+https://turva.dev/llms-txt-validator)";
 
 export function normalizeHostInput(raw) {

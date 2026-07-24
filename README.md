@@ -1,6 +1,6 @@
 # turva-llms-txt-validator
 
-Validate a site's llms.txt structure from the command line, from Node, or in CI. Seven checks, each reported as pass, warn or fail, with a one-line detail. No score on purpose: a structure check can say what is there and what is missing, and a number on top of seven checks would look like an agent-readiness score without measuring one.
+Validate a site's llms.txt structure from the command line, from Node, or in CI. Eight checks, each reported as pass, warn or fail, with a one-line detail. No score on purpose: a structure check can say what is there and what is missing, and a number on top of eight checks would look like an agent-readiness score without measuring one.
 
 This is the open-source form of the hosted validator at [turva.dev/llms-txt-validator](https://turva.dev/llms-txt-validator), which runs the same logic inside the open [turva.dev Cloudflare Worker](https://github.com/erekola/turva-worker). The hosted validator stays canonical: if the two ever disagree, the hosted one wins and this package gets the fix.
 
@@ -20,7 +20,7 @@ Or run it without installing:
 
 Exit codes: 0 valid (warnings allowed), 1 not valid (with --strict, warnings also exit 1), 2 fetch or input error. Only the target site's /llms.txt is fetched over https, following a redirect only to the same host or its www/apex twin (an off-site or unsafe redirect fails the first check), the fetch times out after 8 seconds and the read is capped at 256 KB. Nothing is stored.
 
-## The seven checks
+## The eight checks
 
 | # | Check | fail | warn |
 |---|-------|------|------|
@@ -31,8 +31,7 @@ Exit codes: 0 valid (warnings allowed), 1 not valid (with --strict, warnings als
 | 5 | H2 sections group the content | | no H2 sections |
 | 6 | Markdown links an agent can follow | | no links, or relative links |
 | 7 | Small enough to be cheap to read | | over 50 KB, or read truncated at 256 KB |
-
-An eighth signal, inline HTML in the file, is reported in the same list as a warning.
+| 8 | No HTML markup in the file | | HTML tags found |
 
 ## Node API
 
