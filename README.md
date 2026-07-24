@@ -1,6 +1,6 @@
 # turva-llms-txt-validator
 
-Validate a site's llms.txt structure from the command line, from Node, or in CI. Eight checks, each reported as pass, warn or fail, with a one-line detail. No score on purpose: a structure check can say what is there and what is missing, and a number on top of eight checks would look like an agent-readiness score without measuring one.
+Validate a site's llms.txt structure from the command line, from Node or in CI. Eight checks, each reported as pass, warn or fail, with a one-line detail. No score on purpose: a structure check can say what is there and what is missing, and a number on top of eight checks would look like an agent-readiness score without measuring one.
 
 This is the open-source form of the hosted validator at [turva.dev/llms-txt-validator](https://turva.dev/llms-txt-validator), which runs the same logic inside the open [turva.dev Cloudflare Worker](https://github.com/erekola/turva-worker). The hosted validator stays canonical: if the two ever disagree, the hosted one wins and this package gets the fix.
 
@@ -56,8 +56,8 @@ Woodpecker or any other runner: the same npx line works anywhere Node 18.17 or n
 
 ## Why these checks
 
-The llms.txt format is a plain text map of a site for AI agents: an H1 title, a one-line blockquote summary, and H2 sections of markdown links. The checks test exactly that structure and nothing else. What the format is and why it matters is written out at [llms.txt explained](https://turva.dev/guides/llms-txt), and the free tools this package belongs to are collected at [turva.dev/tools](https://turva.dev/tools).
+The llms.txt format is a plain text map of a site for AI agents: an H1 title, a one-line blockquote summary and H2 sections of markdown links. The checks test exactly that structure and nothing else. What the format is and why it matters is written out at [llms.txt explained](https://turva.dev/guides/llms-txt), and the free tools this package belongs to are collected at [turva.dev/tools](https://turva.dev/tools).
 
 ## License
 
-MIT. Source at [github.com/erekola/llms-txt-validator](https://github.com/erekola/llms-txt-validator), mirrored at [codeberg.org/erekola/llms-txt-validator](https://codeberg.org/erekola/llms-txt-validator). Published to npm from GitHub Actions with provenance, a signed attestation of where and how the package was built, verifiable on the npm package page.
+MIT. Source at [github.com/erekola/llms-txt-validator](https://github.com/erekola/llms-txt-validator). Published to npm from GitHub Actions with provenance, a signed attestation of where and how the package was built, verifiable on the npm package page.
