@@ -16,7 +16,7 @@ on:
 
 permissions:
   id-token: write   # required: lets the job mint the OIDC token for npm
-  contents: read
+  contents: write   # required: lets the last step create the GitHub release
 
 jobs:
   publish:
@@ -30,3 +30,14 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm publish
+
+      # The tag is also a release. Without this the repository shows tags and
+      # no versions, and the CHANGELOG entry stays invisible on GitHub.
+      - name: Release notes from CHANGELOG
+        run: |
+          awk -v v="${GITHUB_REF_NAME#v}" 'index($0, "## " v " ") == 1 { f = 1; next } /^## / { f = 0 } f' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then echo "See CHANGELOG.md." > release-notes.md; fi
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --title "${GITHUB_REF_NAME#v}" --notes-file release-notes.md

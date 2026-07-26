@@ -1,5 +1,18 @@
 # turva-llms-txt-validator changelog
 
+## 0.1.5 (2026-07-26)
+
+Documentation only. The README now states what the host check covers and
+what it does not: IP literals, bracketed IPv6, ports, credentials and the
+internal-use TLDs are refused before any request goes out, and every
+redirect hop is checked by the same rule, but names are not resolved here,
+so a public name pointing at a private address is stopped by the network
+the fetch runs on rather than by this code. The repository also gained a
+SECURITY.md covering the supported version, the trusted-publishing supply
+chain and where to report a vulnerability. It stays out of the npm
+tarball, which carries src, bin, README.md and LICENSE. No check logic
+changes: src/index.mjs is identical to 0.1.4.
+
 ## 0.1.4 (2026-07-24)
 
 VERSION is now read from package.json at module load, so the exported

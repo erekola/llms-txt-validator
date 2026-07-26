@@ -20,6 +20,8 @@ Or run it without installing:
 
 Exit codes: 0 valid (warnings allowed), 1 not valid (with --strict, warnings also exit 1), 2 fetch or input error. Only the target site's /llms.txt is fetched over https, following a redirect only to the same host or its www/apex twin (an off-site or unsafe redirect fails the first check), the fetch times out after 8 seconds and the read is capped at 256 KB. Nothing is stored.
 
+The target has to be a public domain name: an IP literal, a bracketed IPv6 address, localhost and the internal-use TLDs local, internal, home, lan, corp, test and invalid are all refused before any request goes out, and every redirect hop is checked by the same rule. Names are not resolved here, so a public name that points at a private address is stopped by the network the fetch runs on rather than by this code. On the hosted validator that network is the Cloudflare edge, which does not route to private address space.
+
 ## The eight checks
 
 | # | Check | fail | warn |
