@@ -1,5 +1,19 @@
 # turva-llms-txt-validator changelog
 
+## 0.1.6 (2026-08-01)
+
+Two corrections found by an audit of the hosted validator, mirrored here because
+the hosted version is canonical.
+
+The redirect chain now has one timeout budget instead of one per hop. `timeoutMs`
+meant 8 seconds per redirect, so a file behind the maximum five hops could take
+five times the value the caller passed. The budget is now taken once before the
+loop and each hop gets what is left of it.
+
+The check list said "Starts with a single H1 title". The check has never counted
+H1 headings; it tests that the first non-empty line is one. The wording now says
+what the code does. No behaviour change in that check.
+
 ## 0.1.5 (2026-07-26)
 
 Documentation only. The README now states what the host check covers and

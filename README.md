@@ -28,7 +28,7 @@ The target has to be a public domain name: an IP literal, a bracketed IPv6 addre
 |---|-------|------|------|
 | 1 | File exists at /llms.txt, HTTP 200 (a same-site www/apex redirect is followed) | non-200, or an off-site or unsafe redirect | |
 | 2 | Response is plain text | body looks like HTML | content-type is not text/plain or text/markdown |
-| 3 | Starts with a single H1 title | first non-empty line is not a markdown H1 | |
+| 3 | Starts with an H1 title | first non-empty line is not a markdown H1 | |
 | 4 | Blockquote summary after the title | | missing one-line summary |
 | 5 | H2 sections group the content | | no H2 sections |
 | 6 | Markdown links an agent can follow | | no links, or relative links |

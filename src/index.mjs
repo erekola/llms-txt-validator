@@ -41,10 +41,14 @@ export async function fetchLlmsTxt(host, opts = {}) {
   const reqApex = host.startsWith("www.") ? host.slice(4) : host;
   let url = "https://" + host + "/llms.txt";
   let redirectedFrom = null;
+  // One budget for the whole redirect chain, not one per hop. Mirrors the hosted validator
+  // (turva.dev/llms-txt-validator), which is canonical: with five hops a per-hop signal made
+  // the caller's timeout five times longer than the value it passed in.
+  const deadline = Date.now() + timeoutMs;
   for (let hop = 0; ; hop++) {
     const res = await fetch(url, {
       redirect: "manual",
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
       headers: { "user-agent": opts.userAgent ?? UA, "accept": "text/plain, text/markdown;q=0.9, */*;q=0.1" }
     });
     if (res.status >= 300 && res.status < 400) {
