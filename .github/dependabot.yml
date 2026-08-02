@@ -1,0 +1,31 @@
+# Dependency version updates for turva-llms-txt-validator.
+# This one is published to npm, so a vulnerable dependency reaches installers,
+# not only this repository. It also has GitHub Actions workflows, which pin
+# third-party actions and go stale on their own schedule.
+# Note: this file covers version updates only. Dependabot security updates and
+# the alerts behind them are a repository setting (Settings > Code security),
+# not something this file can enable.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Europe/Helsinki
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: deps
+    groups:
+      all-dependencies:
+        patterns:
+          - "*"
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+      timezone: Europe/Helsinki
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: ci
