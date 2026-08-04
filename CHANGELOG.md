@@ -1,5 +1,18 @@
 # turva-llms-txt-validator changelog
 
+## 0.1.8 (2026-08-04)
+
+The 0.1.7 fix was incomplete. It bounded the label class and left the URL class
+unbounded, and that class can still cross an opening bracket, so input shaped like
+an unterminated link repeated over and over gave every position a fresh scan. 256 KB
+of it took 6 410 ms after 0.1.7 and 6 182 ms before it, so that shape was never fixed.
+CodeQL reopened the alert on the same line within the hour and it was right to.
+
+The URL class is now bounded to 2 048 characters, which is longer than any link this
+tool has any business reading, and the worst case drops to 172 ms. Behaviour is
+identical to 0.1.6, measured across 200 000 fuzzed inputs on both the match count and
+every captured URL.
+
 ## 0.1.7 (2026-08-04)
 
 A ReDoS in the markdown link scan, reported by CodeQL against this package and
