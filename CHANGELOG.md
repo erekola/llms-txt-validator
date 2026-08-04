@@ -1,5 +1,23 @@
 # turva-llms-txt-validator changelog
 
+## 0.1.7 (2026-08-04)
+
+A ReDoS in the markdown link scan, reported by CodeQL against this package and
+present in the hosted validator in the same words. The label class could cross an
+opening bracket, so a run of unmatched `[` characters made the engine restart from
+every position. 256 KB of them, which is this tool's own read cap, took 17,2 seconds
+of CPU in one regex; after the fix the same input takes 0,5 ms. The input is fully
+attacker controlled, because the validator fetches whatever URL it is given.
+
+The label class now excludes the opening bracket as well, which makes the scan linear.
+Behaviour is unchanged and that was measured rather than reasoned: across 200 000
+fuzzed inputs the match count and every captured URL are identical, and the only
+capture group that differs is the one this file never reads.
+
+The CI workflow also declares `permissions: contents: read`, which it did not before.
+
+Fixed in the hosted validator first, as the parity rule requires.
+
 ## 0.1.6 (2026-08-01)
 
 Two corrections found by an audit of the hosted validator, mirrored here because

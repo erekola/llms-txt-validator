@@ -148,7 +148,7 @@ export function validateLlmsTxt(f) {
   } else {
     add("sections", "warn", "H2 sections group the content", "no H2 sections found; sections are the convention for grouping links");
   }
-  const links = [...f.text.matchAll(/\[([^\]]*)\]\(([^)\s]+)\)/g)];
+  const links = [...f.text.matchAll(/\[([^\][]*)\]\(([^)\s]+)\)/g)];
   const absolute = links.filter((m) => /^https?:\/\//.test(m[2])).length;
   if (links.length === 0) {
     add("links", "warn", "Markdown links an agent can follow", "no markdown links found");
