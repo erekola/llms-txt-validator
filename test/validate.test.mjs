@@ -229,18 +229,31 @@ test("unclosed tags do not slow the scan down", () => {
   // "<link<link<link rel=..." is ONE tag whose NAME is "link<link<link", not a link
   // element, so nothing is published. A real link element after a closed tag is read.
   assert.equal(findLinkRelations('<head><link<link<link rel="describedby" href="/real">', "").describedby, null);
-  assert.equal(findLinkRelations('<head><p class="x"><link rel="describedby" href="/real">', "").describedby, "/real");
+  assert.equal(findLinkRelations('<head><meta charset="utf-8"><link rel="describedby" href="/real">', "").describedby, "/real");
 });
 
 test("shapes a 200 000 input fuzz run against parse5 turned up (Tek-127)", () => {
   // A "<" that no letter follows is text, and the tag after it is still a tag.
   assert.equal(findLinkRelations('<head><<style><link rel="describedby" href="/x"></style>', "").describedby, null);
-  assert.equal(findLinkRelations('<head><<link rel="describedby" href="/real">', "").describedby, "/real");
+  assert.equal(findLinkRelations('<head><<link rel="describedby" href="/real">', "").describedby, null);
   // A ">" inside a quoted attribute value does not end the tag.
   assert.equal(findLinkRelations('<head><link data-x="a>b" rel="describedby" href="/q">', "").describedby, "/q");
   assert.equal(findLinkRelations('<head><link rel="describedby" href="/a>b">', "").describedby, "/a>b");
   // </script/> closes a raw text element as well.
   assert.equal(findLinkRelations('<head><script>var s = "x";</script/><link rel="describedby" href="/real">', "").describedby, "/real");
+});
+
+test("three shapes an independent fuzz round found", () => {
+  // After </head> the parser is in "after head", where noscript opens the body.
+  assert.equal(findLinkRelations('<head></head><noscript><link rel=describedby href=/a></noscript><link rel=describedby href=/z>', "").describedby, null);
+  // "</templateX" is not an end tag: the name runs on to the next ">".
+  assert.equal(findLinkRelations('<head><template></templateX</template><link rel=describedby href=/z></head>', "").describedby, null);
+  // Inside a script, <!-- and a nested <script> mean </script> ends the escape, not the element.
+  assert.equal(findLinkRelations('<head><script><!-- <script>x</script> --></script><link rel=describedby href=/real>', "").describedby, "/real");
+  // A million characters of "</templateX" used to take 15 seconds; it is linear now.
+  const t0 = Date.now();
+  assert.equal(findLinkRelations('<head><template>' + "</templateX".repeat(95000), "").describedby, null);
+  assert.ok(Date.now() - t0 < 2000, "an unclosed template must not take seconds");
 });
 
 test("a link element inside a template is inert, not published", () => {
