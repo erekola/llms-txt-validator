@@ -1,5 +1,32 @@
 # turva-llms-txt-validator changelog
 
+## 0.2.1 (2026-08-24)
+
+The two v2 discovery checks now read the head a real HTML parser builds, and the code that
+finds the link relations no longer uses regular expressions that a target site can make
+quadratic.
+
+Three code scanning alerts started this. One said the comment strip could leave a bare
+`<!--` behind, and two said a character class that reads a tag's attributes runs in
+quadratic time on input the target site chooses. All three were true. A page made of 256 KB
+of unclosed `<script` tags took 2 383 ms to read before and takes 1 ms now.
+
+The reader is one left to right scan by index. It removes comments and the content of the
+script, style, title, noscript, noframes and template elements, and it stops where the head
+ends: at the first text node or the first body level element, which is what the HTML parsing
+spec describes in its "in head" and "after head" insertion modes. A `</head>` end tag does
+not stop it, because a parser still puts link, meta, script, style, title and template into
+the head element after one.
+
+What this changes in a result: a link element that a parser moves into the body used to
+count as a published relation and no longer does. Both checks stay information, never a
+warning and never a failure, so the summary line and the `--strict` exit code are exactly
+what they were in 0.2.0, and the eight structural checks on the llms.txt file did not move.
+
+The behaviour was measured against parse5, a real HTML parser, on 200 000 generated
+documents with four different seeds: identical on every input, in both directions. The
+hosted validator at turva.dev/llms-txt-validator carries the same code and stays canonical.
+
 ## 0.2.0 (2026-08-24)
 
 v2 of the llms.txt proposal was published on 2026-08-10. It left the file format
