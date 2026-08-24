@@ -189,7 +189,23 @@ export function findLinkRelations(html, linkHeader) {
   // and counting one would report a relation the site does not serve. With no
   // </head> the first 64 KB are scanned, body included, so a malformed document
   // does not silently report nothing found.
-  const text = String(html || "").replace(/<!--[\s\S]*?-->/g, "");
+  //
+  // What the replace below removes, measured against a real HTML parser (parse5)
+  // rather than reasoned about. An unterminated <!-- comments out the rest of the
+  // document, so the strip runs to the end of the input. <!--> and <!---> are empty
+  // comments, not unterminated ones, and --!> ends a comment too. script, style,
+  // title and textarea are raw text or RCDATA, where a tag is text rather than
+  // markup, and template content is inert, so a link element inside any of them is
+  // not published while one after the closing tag is. It is ONE left to right pass,
+  // not one pass per rule, because order decides both a comment that mentions
+  // <script> in prose and a <script><!-- ... </script> block. Four deliberate
+  // differences from parse5, measured over 35 document shapes: noscript, whose
+  // contents an agent that does not run scripts does see; nested templates, where the
+  // inner closing tag ends the strip; a literal <!-- inside an attribute value, read
+  // as an unterminated comment; and the head that a parser closes at its first text
+  // node, whose link elements are still counted here as served, which they are.
+  const text = String(html || "").replace(
+    /<!--(?:>|->)|<!--[\s\S]*?(?:--!?>|$)|<(script|style|template|title|textarea)\b[^>]*>[\s\S]*?(?:<\/\1\s*>|$)/gi, "");
   const cut = text.toLowerCase().indexOf("</head>");
   const head = cut === -1 ? text.slice(0, 65536) : text.slice(0, cut);
   for (const tag of head.match(/<link\b[^>]*>/gi) || []) {

@@ -193,6 +193,43 @@ test("a commented-out link element is not a published relation", () => {
   assert.deepEqual(findLinkRelations(html, ""), { describedby: null, markdown: null });
 });
 
+test("an unterminated comment hides the rest of the document", () => {
+  const html = '<head><!-- <link rel="describedby" href="/x.txt"><link rel="alternate" type="text/markdown" href="/x.md">';
+  assert.deepEqual(findLinkRelations(html, ""), { describedby: null, markdown: null });
+});
+
+// The shapes below were measured against parse5, a real HTML parser, on the day the
+// comment stripping was rewritten. Both directions are wrong answers: counting a
+// relation the page does not publish, and hiding one it does.
+test("script and style are raw text, so a link element after them is published", () => {
+  assert.equal(findLinkRelations('<head><script><!--\nvar x = 1;\n</script><link rel="describedby" href="/real">', "").describedby, "/real");
+  assert.equal(findLinkRelations('<head><style><!-- .a{} </style><link rel="describedby" href="/real">', "").describedby, "/real");
+  assert.equal(findLinkRelations('<head><script>var s = "<link rel=describedby href=/nope>";</script>', "").describedby, null);
+  assert.equal(findLinkRelations('<head><script>var x = 1;<link rel="describedby" href="/nope">', "").describedby, null);
+});
+
+test("the strip is one pass, so a comment that mentions a script tag is only a comment", () => {
+  const html = '<head><!-- put your <script> tag here --><link rel="alternate" type="text/markdown" href="/found"><script>var r = 1;</script></head>';
+  assert.equal(findLinkRelations(html, "").markdown, "/found");
+});
+
+test("a link tag written inside a title is text, not markup", () => {
+  assert.equal(findLinkRelations('<head><title>How to use <link rel=describedby> for llms.txt</title></head>', "").describedby, null);
+  assert.equal(findLinkRelations('<head><title>How to use <link rel=describedby></title><link rel="describedby" href="/real"></head>', "").describedby, "/real");
+});
+
+test("a link element inside a template is inert, not published", () => {
+  assert.equal(findLinkRelations('<head><template><link rel="describedby" href="/inert"></template></head>', "").describedby, null);
+  assert.equal(findLinkRelations('<head><template><link rel="describedby" href="/inert"></template><link rel="describedby" href="/real"></head>', "").describedby, "/real");
+});
+
+test("an empty comment is not an unterminated one", () => {
+  assert.equal(findLinkRelations('<head><!--><link rel="describedby" href="/after">', "").describedby, "/after");
+  assert.equal(findLinkRelations('<head><!---><link rel="describedby" href="/after">', "").describedby, "/after");
+  assert.equal(findLinkRelations('<head><!----><link rel="describedby" href="/after">', "").describedby, "/after");
+  assert.equal(findLinkRelations('<head><!-- x --!><link rel="describedby" href="/after">', "").describedby, "/after");
+});
+
 test("an unquoted href is read, not reported as missing", () => {
   const f = findLinkRelations("<head><link rel=alternate type=text/markdown href=/noquotes.md></head>", "");
   assert.equal(f.markdown, "/noquotes.md");
