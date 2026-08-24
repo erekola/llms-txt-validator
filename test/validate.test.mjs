@@ -218,6 +218,31 @@ test("a link tag written inside a title is text, not markup", () => {
   assert.equal(findLinkRelations('<head><title>How to use <link rel=describedby></title><link rel="describedby" href="/real"></head>', "").describedby, "/real");
 });
 
+// The tag scan is by index, not by /<link\b[^>]*>/g, because that regex is quadratic on
+// input the target site controls. CodeQL reports the same shape as js/polynomial-redos.
+test("unclosed tags do not slow the scan down", () => {
+  const t0 = Date.now();
+  assert.deepEqual(findLinkRelations("<link".repeat(52428), ""), { describedby: null, markdown: null });
+  assert.deepEqual(findLinkRelations("<script".repeat(37449), ""), { describedby: null, markdown: null });
+  assert.deepEqual(findLinkRelations("", "<".repeat(65536)), { describedby: null, markdown: null });
+  assert.ok(Date.now() - t0 < 2000, "256 KB of unclosed tags must not take seconds");
+  // "<link<link<link rel=..." is ONE tag whose NAME is "link<link<link", not a link
+  // element, so nothing is published. A real link element after a closed tag is read.
+  assert.equal(findLinkRelations('<head><link<link<link rel="describedby" href="/real">', "").describedby, null);
+  assert.equal(findLinkRelations('<head><p class="x"><link rel="describedby" href="/real">', "").describedby, "/real");
+});
+
+test("shapes a 200 000 input fuzz run against parse5 turned up (Tek-127)", () => {
+  // A "<" that no letter follows is text, and the tag after it is still a tag.
+  assert.equal(findLinkRelations('<head><<style><link rel="describedby" href="/x"></style>', "").describedby, null);
+  assert.equal(findLinkRelations('<head><<link rel="describedby" href="/real">', "").describedby, "/real");
+  // A ">" inside a quoted attribute value does not end the tag.
+  assert.equal(findLinkRelations('<head><link data-x="a>b" rel="describedby" href="/q">', "").describedby, "/q");
+  assert.equal(findLinkRelations('<head><link rel="describedby" href="/a>b">', "").describedby, "/a>b");
+  // </script/> closes a raw text element as well.
+  assert.equal(findLinkRelations('<head><script>var s = "x";</script/><link rel="describedby" href="/real">', "").describedby, "/real");
+});
+
 test("a link element inside a template is inert, not published", () => {
   assert.equal(findLinkRelations('<head><template><link rel="describedby" href="/inert"></template></head>', "").describedby, null);
   assert.equal(findLinkRelations('<head><template><link rel="describedby" href="/inert"></template><link rel="describedby" href="/real"></head>', "").describedby, "/real");
