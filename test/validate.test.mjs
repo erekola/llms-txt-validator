@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateLlmsTxt, summarizeChecks, normalizeHostInput, isValidPublicHost, fetchLlmsTxt } from "../src/index.mjs";
+import { validateLlmsTxt, summarizeChecks, normalizeHostInput, isValidPublicHost, fetchLlmsTxt, findLinkRelations, validateV2Discovery, validateHost } from "../src/index.mjs";
 
 const good = (text, extra = {}) => ({ status: 200, contentType: "text/plain; charset=utf-8", text, bytes: Buffer.byteLength(text), truncated: false, ...extra });
 const byId = (checks, id) => checks.find((c) => c.id === id);
@@ -130,5 +130,97 @@ test("fetchLlmsTxt caps redirect chains", async () => {
   try {
     const f = await fetchLlmsTxt("ex.com");
     assert.equal(f.reason, "too-many");
+  } finally { globalThis.fetch = orig; }
+});
+
+// v2 discovery. These read the site rather than the file, so the point of every case
+// below is the same one: whatever they report, the summary and the exit code must not
+// move. A check that quietly turned every valid file into "valid with warnings" would
+// have changed which files pass, which is a decision and not a measurement.
+
+test("findLinkRelations reads both relations from a head", () => {
+  const html = `<!doctype html><html><head>
+    <link rel="canonical" href="https://ex.com/page" />
+    <link rel="alternate" href="https://ex.com/page.md" type="text/markdown" />
+    <link rel="describedby" href="/llms.txt" />
+    </head><body><link rel="describedby" href="/decoy.txt"></body></html>`;
+  const f = findLinkRelations(html, "");
+  assert.equal(f.markdown, "https://ex.com/page.md");
+  assert.equal(f.describedby, "/llms.txt");
+});
+
+test("findLinkRelations reads both relations from a Link header", () => {
+  const hdr = '</openapi.json>; rel="service-desc"; type="application/json", </page.md>; rel="alternate"; type="text/markdown", </llms.txt>; rel="describedby"; type="text/plain"';
+  const f = findLinkRelations("", hdr);
+  assert.equal(f.markdown, "/page.md");
+  assert.equal(f.describedby, "/llms.txt");
+});
+
+test("findLinkRelations does not accept an alternate of the wrong type", () => {
+  const html = '<head><link rel="alternate" type="application/rss+xml" href="/feed.xml" /></head>';
+  assert.equal(findLinkRelations(html, "").markdown, null);
+  assert.equal(findLinkRelations("", '</feed.xml>; rel="alternate"; type="application/rss+xml"').markdown, null);
+});
+
+test("v2 checks are info when absent and never change the summary", () => {
+  const text = "# Example\n\n> One line about the site.\n\n## Docs\n\n- [Guide](https://example.com/guide)\n";
+  const file = validateLlmsTxt(good(text));
+  const both = file.concat(validateV2Discovery(findLinkRelations("<head></head>", "")));
+  assert.equal(both.length, 10);
+  assert.deepEqual(both.slice(8).map((c) => c.status), ["info", "info"]);
+  assert.equal(summarizeChecks(both), "valid");
+  assert.equal(summarizeChecks(file), summarizeChecks(both));
+});
+
+test("v2 checks pass when the relations are there, and say why when the page was not read", () => {
+  const found = findLinkRelations('<head><link rel="describedby" href="/llms.txt"><link rel="alternate" type="text/markdown" href="/index.md"></head>', "");
+  assert.deepEqual(validateV2Discovery(found).map((c) => c.status), ["pass", "pass"]);
+  const unread = validateV2Discovery(null, "the home page returned HTTP 500, so this was not measured");
+  assert.deepEqual(unread.map((c) => c.status), ["info", "info"]);
+  for (const c of unread) assert.match(c.detail, /not measured/);
+  assert.equal(summarizeChecks(unread), "valid");
+});
+
+// Adversarial inputs for the parser. The first two are the ones an independent
+// review found on the day this shipped: a commented-out link element counted as
+// published, and an unquoted href read as missing while its rel and type were read
+// fine. Both would have reported a relation the site does not actually serve, or
+// reported one without its target, which is the single thing a measurement of
+// someone else's site may not do.
+
+test("a commented-out link element is not a published relation", () => {
+  const html = '<head><!-- <link rel="alternate" type="text/markdown" href="/commented.md"> --><!--<link rel="describedby" href="/x.txt">--></head>';
+  assert.deepEqual(findLinkRelations(html, ""), { describedby: null, markdown: null });
+});
+
+test("an unquoted href is read, not reported as missing", () => {
+  const f = findLinkRelations("<head><link rel=alternate type=text/markdown href=/noquotes.md></head>", "");
+  assert.equal(f.markdown, "/noquotes.md");
+});
+
+test("the parser survives the shapes a real page throws at it", () => {
+  assert.equal(findLinkRelations('<head><link rel="alternate" type="text/markdown; charset=utf-8" href="/a.md"></head>', "").markdown, "/a.md");
+  assert.equal(findLinkRelations('<head><link rel="alternate stylesheet" type="text/css" href="/a.css"></head>', "").markdown, null);
+  assert.equal(findLinkRelations('<head><link rel="DescribedBy" HREF="/LLMS.txt"></head>', "").describedby, "/LLMS.txt");
+  // No </head> at all: the body is scanned rather than reporting nothing found.
+  assert.equal(findLinkRelations('<link rel="describedby" href="/llms.txt">', "").describedby, "/llms.txt");
+  // A comma inside the URL of a Link header must not split the header value.
+  const hdr = '</a,b.md>; rel="alternate"; type="text/markdown", </llms.txt>; rel="describedby"';
+  const f = findLinkRelations("", hdr);
+  assert.equal(f.markdown, "/a,b.md");
+  assert.equal(f.describedby, "/llms.txt");
+});
+
+test("validateHost cannot be pointed at another path by its caller options", async () => {
+  const orig = globalThis.fetch;
+  const asked = [];
+  globalThis.fetch = async (u) => {
+    asked.push(String(u));
+    return new Response("# Example\n\n> One line.\n\n## Docs\n\n- [G](https://ex.com/g)\n", { status: 200, headers: { "content-type": "text/plain" } });
+  };
+  try {
+    await validateHost("ex.com", { path: "/somewhere-else", accept: "text/html" });
+    assert.equal(asked[0], "https://ex.com/llms.txt", "the first read is pinned to /llms.txt");
+    assert.equal(asked[1], "https://ex.com/", "the second read is pinned to the home page");
   } finally { globalThis.fetch = orig; }
 });

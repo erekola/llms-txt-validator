@@ -1,5 +1,29 @@
 # turva-llms-txt-validator changelog
 
+## 0.2.0 (2026-08-24)
+
+v2 of the llms.txt proposal was published on 2026-08-10. It left the file format
+untouched and added discovery: a page names its markdown version with
+`rel="alternate" type="text/markdown"` and the llms.txt that covers it with
+`rel="describedby"`, either as HTML link elements or as a Link response header.
+
+Two checks report those relations from the target site's home page. They report
+`pass` when a relation is there and a new status, `info`, when it is not. Neither
+is ever `warn` or `fail`, so the summary line and the `--strict` exit code are
+exactly what they were in 0.1.8. The relations belong
+to the site rather than to the file, and v2 is two weeks old, so scoring them as
+warnings would have moved which files pass instead of measuring something new. How
+common the relations are in the wild is not measured here and nothing claims it.
+
+The fetch now reads two documents from the target, `/llms.txt` and `/`, each under
+the same guards as before: https only, redirects only to the same host or its
+www/apex twin, 8 second timeout, 256 KB cap. Nothing else is requested and the site
+is still never crawled. `fetchLlmsTxt` takes `opts.path` and `opts.accept` for that
+second read, and returns the response's Link header alongside the body.
+
+The hosted validator at turva.dev/llms-txt-validator is canonical as always and
+carries the same two checks.
+
 ## 0.1.8 (2026-08-04)
 
 The 0.1.7 fix was incomplete. It bounded the label class and left the URL class
@@ -57,6 +81,17 @@ SECURITY.md covering the supported version, the trusted-publishing supply
 chain and where to report a vulnerability. It stays out of the npm
 tarball, which carries src, bin, README.md and LICENSE. No check logic
 changes: src/index.mjs is identical to 0.1.4.
+
+Correction 2026-08-16: the entry above overstates what the README says. The
+README's host paragraph names IP literals, bracketed IPv6, localhost and the
+internal-use TLDs; it does not name ports or credentials, although the code
+refuses both (src/index.mjs rejects any port other than 443 or 80, rejects a
+username or password, and re-checks every redirect hop by the same rule). The
+published 0.1.5 tarball's README reads the same as the one on disk, so this
+was wrong on the day it was written rather than gone stale. The README
+paragraph is deliberately not being widened to match: it describes the check
+as a host-shape check, which is what the code is, and claiming more there is
+the direction this project avoids.
 
 ## 0.1.4 (2026-07-24)
 

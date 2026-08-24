@@ -1,6 +1,6 @@
 # turva-llms-txt-validator
 
-Validate a site's llms.txt structure from the command line, from Node or in CI. Eight checks, each reported as pass, warn or fail, with a one-line detail. No score on purpose: a structure check can say what is there and what is missing, and a number on top of eight checks would look like an agent-readiness score without measuring one.
+Validate a site's llms.txt structure from the command line, from Node or in CI. Eight structure checks, each reported as pass, warn or fail with a one-line detail, and two v2 discovery checks reported as information. No score on purpose: a structure check can say what is there and what is missing, and a number on top of ten checks would look like an agent-readiness score without measuring one.
 
 This is the open-source form of the hosted validator at [turva.dev/llms-txt-validator](https://turva.dev/llms-txt-validator), which runs the same logic inside the open [turva.dev Cloudflare Worker](https://github.com/erekola/turva-worker). The hosted validator stays canonical: if the two ever disagree, the hosted one wins and this package gets the fix.
 
@@ -18,11 +18,11 @@ Or run it without installing:
     llms-txt-validate example.com --json
     llms-txt-validate example.com --strict
 
-Exit codes: 0 valid (warnings allowed), 1 not valid (with --strict, warnings also exit 1), 2 fetch or input error. Only the target site's /llms.txt is fetched over https, following a redirect only to the same host or its www/apex twin (an off-site or unsafe redirect fails the first check), the fetch times out after 8 seconds and the read is capped at 256 KB. Nothing is stored.
+Exit codes: 0 valid (warnings allowed), 1 not valid (with --strict, warnings also exit 1), 2 fetch or input error. The two v2 checks are reported as information and move no exit code. Two documents are fetched from the target site over https, its /llms.txt and its home page, each following a redirect only to the same host or its www/apex twin (an off-site or unsafe redirect fails the first check), each fetch times out after 8 seconds and each read is capped at 256 KB. Nothing else is requested, the site is never crawled and nothing is stored.
 
 The target has to be a public domain name: an IP literal, a bracketed IPv6 address, localhost and the internal-use TLDs local, internal, home, lan, corp, test and invalid are all refused before any request goes out, and every redirect hop is checked by the same rule. Names are not resolved here, so a public name that points at a private address is stopped by the network the fetch runs on rather than by this code. On the hosted validator that network is the Cloudflare edge, which does not route to private address space.
 
-## The eight checks
+## The checks
 
 | # | Check | fail | warn |
 |---|-------|------|------|
@@ -35,6 +35,13 @@ The target has to be a public domain name: an IP literal, a bracketed IPv6 addre
 | 7 | Small enough to be cheap to read | | over 50 KB, or read truncated at 256 KB |
 | 8 | No HTML markup in the file | | HTML tags found |
 
+Two more checks read the site's home page for the link relations v2 of the format recommends. They describe the site rather than the file, so they carry the status `pass` when the relation is there and `info` when it is not, never `warn` and never `fail`, and they leave both the summary line and the `--strict` exit code alone. v2 is two weeks old at the time of writing, so warning about these would turn valid files into files with warnings for following the version of the format they were written against.
+
+| # | Check | pass | info |
+|---|-------|------|------|
+| 9 | Home page points to its llms.txt (v2) | `rel="describedby"` found in the head or the Link header | not found, or the home page could not be read |
+| 10 | Home page points to a markdown version (v2) | `rel="alternate" type="text/markdown"` found in the head or the Link header | not found, or the home page could not be read |
+
 ## Node API
 
     import { validateHost } from "turva-llms-txt-validator";
@@ -43,7 +50,7 @@ The target has to be a public domain name: an IP literal, a bracketed IPv6 addre
     console.log(result.summary);
     for (const c of result.checks) console.log(c.status, c.label, c.detail);
 
-The summary is one of valid, valid with warnings, or not valid. The result object is { target, summary, checks }, the same shape the hosted validator returns as JSON:
+The summary is one of valid, valid with warnings, or not valid, and the two v2 checks never change it. The result object is { target, summary, checks }, the same shape the hosted validator returns as JSON:
 
     curl -H "Accept: application/json" "https://turva.dev/llms-txt-validator?url=example.com"
 
@@ -58,7 +65,7 @@ Woodpecker or any other runner: the same npx line works anywhere Node 18.17 or n
 
 ## Why these checks
 
-The llms.txt format is a plain text map of a site for AI agents: an H1 title, a one-line blockquote summary and H2 sections of markdown links. The checks test exactly that structure and nothing else. What the format is and why it matters is written out at [llms.txt explained](https://turva.dev/guides/llms-txt), and the free tools this package belongs to are collected at [turva.dev/tools](https://turva.dev/tools).
+The llms.txt format is a plain text map of a site for AI agents: an H1 title, a one-line blockquote summary and H2 sections of markdown links. v2 of the proposal, published in August 2026, left that format alone and added two link relations so an agent can find a page's markdown version and its llms.txt without guessing. The first eight checks test the structure and nothing else, and the last two report those two relations. What the format is and why it matters is written out at [llms.txt explained](https://turva.dev/guides/llms-txt), and the free tools this package belongs to are collected at [turva.dev/tools](https://turva.dev/tools).
 
 ## License
 

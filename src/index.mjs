@@ -35,11 +35,15 @@ export function isValidPublicHost(host) {
   return true;
 }
 
+// opts.path and opts.accept were added for the v2 discovery checks, which need the
+// site's home page as well as its llms.txt. Nothing else moved: the redirect budget,
+// the same-host rule, the credential and port rejections and the 256 KB cap are the
+// guards this function was measured against.
 export async function fetchLlmsTxt(host, opts = {}) {
   const timeoutMs = opts.timeoutMs ?? 8000;
   const cap = opts.cap ?? 262144;
   const reqApex = host.startsWith("www.") ? host.slice(4) : host;
-  let url = "https://" + host + "/llms.txt";
+  let url = "https://" + host + (opts.path ?? "/llms.txt");
   let redirectedFrom = null;
   // One budget for the whole redirect chain, not one per hop. Mirrors the hosted validator
   // (turva.dev/llms-txt-validator), which is canonical: with five hops a per-hop signal made
@@ -49,7 +53,7 @@ export async function fetchLlmsTxt(host, opts = {}) {
     const res = await fetch(url, {
       redirect: "manual",
       signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
-      headers: { "user-agent": opts.userAgent ?? UA, "accept": "text/plain, text/markdown;q=0.9, */*;q=0.1" }
+      headers: { "user-agent": opts.userAgent ?? UA, "accept": opts.accept ?? "text/plain, text/markdown;q=0.9, */*;q=0.1" }
     });
     if (res.status >= 300 && res.status < 400) {
       const loc = res.headers.get("location") || "";
@@ -89,6 +93,7 @@ export async function fetchLlmsTxt(host, opts = {}) {
     return {
       status: res.status,
       contentType: res.headers.get("content-type") || "",
+      linkHeader: res.headers.get("link") || "",
       text: new TextDecoder("utf-8").decode(buf),
       bytes,
       truncated,
@@ -172,6 +177,53 @@ export function validateLlmsTxt(f) {
   return checks;
 }
 
+// v2 of the llms.txt proposal (August 2026) left the file format alone and added one
+// thing: a page should say where its markdown version and its llms.txt are, using
+// rel="alternate" type="text/markdown" and rel="describedby", as HTML link elements or
+// as a Link response header. That is a property of the site, not of the file, so these
+// two carry their own status, "info". They are never a warn and never a fail, the
+// summary line is unchanged, and --strict keeps exiting on warnings only.
+export function findLinkRelations(html, linkHeader) {
+  const found = { describedby: null, markdown: null };
+  // Comments are stripped first: a commented-out link element is not published,
+  // and counting one would report a relation the site does not serve. With no
+  // </head> the first 64 KB are scanned, body included, so a malformed document
+  // does not silently report nothing found.
+  const text = String(html || "").replace(/<!--[\s\S]*?-->/g, "");
+  const cut = text.toLowerCase().indexOf("</head>");
+  const head = cut === -1 ? text.slice(0, 65536) : text.slice(0, cut);
+  for (const tag of head.match(/<link\b[^>]*>/gi) || []) {
+    const rel = ((tag.match(/\brel\s*=\s*["']?([^"'>]+)/i) || [])[1] || "").toLowerCase().trim().split(/\s+/);
+    const type = ((tag.match(/\btype\s*=\s*["']?([^"'>\s]+)/i) || [])[1] || "").toLowerCase();
+    const href = ((tag.match(/\bhref\s*=\s*"([^"]*)"|\bhref\s*=\s*'([^']*)'|\bhref\s*=\s*([^\s"'>]+)/i) || []).slice(1).find((x) => x !== undefined) || "").trim();
+    if (!found.describedby && rel.includes("describedby")) found.describedby = href || "(link element without href)";
+    if (!found.markdown && rel.includes("alternate") && type.startsWith("text/markdown")) found.markdown = href || "(link element without href)";
+  }
+  for (const part of String(linkHeader || "").split(/,(?=\s*<)/)) {
+    const href = ((part.match(/<([^>]*)>/) || [])[1] || "").trim();
+    const rel = ((part.match(/rel\s*=\s*"?([^";,]+)"?/i) || [])[1] || "").toLowerCase().trim().split(/\s+/);
+    const type = ((part.match(/type\s*=\s*"?([^";,]+)"?/i) || [])[1] || "").toLowerCase().trim();
+    if (!found.describedby && rel.includes("describedby")) found.describedby = href || "(Link header without a target)";
+    if (!found.markdown && rel.includes("alternate") && type.startsWith("text/markdown")) found.markdown = href || "(Link header without a target)";
+  }
+  return found;
+}
+
+export function validateV2Discovery(found, unreadReason) {
+  const checks = [];
+  const add = (id, status, label, detail) => checks.push({ id, status, label, detail });
+  if (!found) {
+    add("v2-describedby", "info", "Home page points to its llms.txt (v2)", unreadReason);
+    add("v2-markdown-alternate", "info", "Home page points to a markdown version (v2)", unreadReason);
+    return checks;
+  }
+  add("v2-describedby", found.describedby ? "pass" : "info", "Home page points to its llms.txt (v2)",
+    found.describedby ? 'rel="describedby" to ' + found.describedby.slice(0, 120) : 'no rel="describedby" in the head or the Link header; v2 recommends it so an agent finds the file without guessing');
+  add("v2-markdown-alternate", found.markdown ? "pass" : "info", "Home page points to a markdown version (v2)",
+    found.markdown ? 'rel="alternate" type="text/markdown" to ' + found.markdown.slice(0, 120) : 'no rel="alternate" type="text/markdown" in the head or the Link header; v2 recommends it so an agent finds the markdown form without guessing');
+  return checks;
+}
+
 export function summarizeChecks(checks) {
   if (checks.some((c) => c.status === "fail")) return "not valid";
   if (checks.some((c) => c.status === "warn")) return "valid with warnings";
@@ -183,7 +235,21 @@ export async function validateHost(input, opts = {}) {
   if (!host || !isValidPublicHost(host)) {
     throw new Error("not a public domain name: " + String(input).slice(0, 120));
   }
-  const fetched = await fetchLlmsTxt(host, opts);
-  const checks = validateLlmsTxt(fetched);
+  // opts comes from the caller, and path and accept exist for this function's own
+  // second read. Forwarding them to the first read would let a caller point the
+  // "llms.txt" result at any path on the host, so both are pinned here.
+  const fetched = await fetchLlmsTxt(host, { ...opts, path: "/llms.txt", accept: undefined });
+  let discovery;
+  try {
+    const home = await fetchLlmsTxt(host, { ...opts, path: "/", accept: "text/html, */*;q=0.1" });
+    discovery = home.redirect
+      ? validateV2Discovery(null, "the home page redirects away from this host, so this was not measured")
+      : home.status !== 200
+        ? validateV2Discovery(null, "the home page returned HTTP " + home.status + ", so this was not measured")
+        : validateV2Discovery(findLinkRelations(home.text, home.linkHeader));
+  } catch {
+    discovery = validateV2Discovery(null, "the home page could not be read, so this was not measured");
+  }
+  const checks = validateLlmsTxt(fetched).concat(discovery);
   return { target: "https://" + host + "/llms.txt", summary: summarizeChecks(checks), checks };
 }
