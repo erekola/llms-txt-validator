@@ -135,8 +135,12 @@ export function validateLlmsTxt(f) {
   }
   const lines = f.text.split(/\r?\n/);
   const firstIdx = lines.findIndex((l) => l.trim() !== "");
-  const first = firstIdx === -1 ? "" : lines[firstIdx].trim();
-  if (/^# \S/.test(first)) {
+  const firstRaw = firstIdx === -1 ? "" : lines[firstIdx];
+  const first = firstRaw.trim();
+  // The line is read as markdown and not trimmed first. Four spaces or a tab make it an
+  // indented code block rather than a heading, and trimming erased that difference, so
+  // "    # Site" passed as the H1 until 2026-08-29. CommonMark allows three spaces.
+  if (/^ {0,3}# \S/.test(firstRaw)) {
     add("h1-title", "pass", "Starts with an H1 title", JSON.stringify(first.slice(0, 80)));
   } else {
     add("h1-title", "fail", "Starts with an H1 title", "the first non-empty line should be a markdown H1 (# Site name)");
@@ -148,19 +152,40 @@ export function validateLlmsTxt(f) {
     add("summary", "warn", "Blockquote summary after the title", "recommended by the format (> one-line summary), not required");
   }
   const h2Count = (f.text.match(/^## /gm) || []).length;
-  if (h2Count > 0) {
-    add("sections", "pass", "H2 sections group the content", h2Count + " section" + (h2Count === 1 ? "" : "s"));
+  // A section counts when it carries a file list. An H2 followed by a paragraph satisfied
+  // this check until 2026-08-29, and the format puts each section's links in a list.
+  let sectionsWithList = 0;
+  {
+    let inSection = false, counted = false;
+    for (const l of lines) {
+      if (/^## /.test(l)) { inSection = true; counted = false; continue; }
+      if (/^# /.test(l)) { inSection = false; continue; }
+      if (inSection && !counted && /^ {0,3}[-*+] .*\[[^\][]*\]\([^)\s]+\)/.test(l)) { sectionsWithList++; counted = true; }
+    }
+  }
+  if (h2Count > 0 && sectionsWithList > 0) {
+    add("sections", "pass", "H2 sections group the content", h2Count + " section" + (h2Count === 1 ? "" : "s") + ", " + sectionsWithList + " carrying a file list");
+  } else if (h2Count > 0) {
+    add("sections", "warn", "H2 sections group the content", h2Count + " section" + (h2Count === 1 ? "" : "s") + " but no file list under any of them; the format puts a section's links in a markdown list");
   } else {
     add("sections", "warn", "H2 sections group the content", "no H2 sections found; sections are the convention for grouping links");
   }
   const links = [...f.text.matchAll(/\[([^\][]*)\]\(([^)\s]{1,2048})\)/g)];
-  const absolute = links.filter((m) => /^https?:\/\//.test(m[2])).length;
+  // An entry an agent can use has a name and a target with a host. An empty name and a
+  // bare "https://" both counted as valid absolute links until 2026-08-29.
+  const named = links.filter((m) => m[1].trim() !== "");
+  const unnamed = links.length - named.length;
+  const absolute = named.filter((m) => /^https?:\/\/[^/\s?#]+/.test(m[2])).length;
   if (links.length === 0) {
     add("links", "warn", "Markdown links an agent can follow", "no markdown links found");
-  } else if (absolute === links.length) {
-    add("links", "pass", "Markdown links an agent can follow", links.length + " link" + (links.length === 1 ? "" : "s") + ", all absolute URLs");
+  } else if (unnamed > 0) {
+    add("links", "warn", "Markdown links an agent can follow", links.length + " link" + (links.length === 1 ? "" : "s") + ", " + unnamed + " with an empty link name; an entry needs a name an agent can show");
+  } else if (absolute === named.length) {
+    add("links", "pass", "Markdown links an agent can follow", named.length + " link" + (named.length === 1 ? "" : "s") + ", all absolute URLs");
   } else {
-    add("links", "warn", "Markdown links an agent can follow", links.length + " links, " + (links.length - absolute) + " relative; absolute URLs travel better when the file is read out of context");
+    const relativeCount = named.filter((m) => !/^[a-z][a-z0-9+.-]*:/i.test(m[2])).length;
+    const hostless = named.length - absolute - relativeCount;
+    add("links", "warn", "Markdown links an agent can follow", named.length + " links, " + relativeCount + " relative" + (hostless > 0 ? " and " + hostless + " with a scheme but no host" : "") + "; absolute URLs travel better when the file is read out of context");
   }
   if (f.truncated) {
     add("size", "warn", "Small enough to be cheap to read", "over 256 KB, read truncated");
@@ -414,20 +439,27 @@ export function findLinkRelations(html, linkHeader) {
     // NAME is "link<link", not as a link element, so \b would count a relation the site
     // does not publish. Measured against parse5, 2026-08-24.
     if (!/^<link(?=[\s/>])/i.test(tag)) continue;
-    const rel = ((tag.match(/\brel\s*=\s*["']?([^"'>]+)/i) || [])[1] || "").toLowerCase().trim().split(/\s+/);
-    const type = ((tag.match(/\btype\s*=\s*["']?([^"'>\s]+)/i) || [])[1] || "").toLowerCase();
-    const href = ((tag.match(/\bhref\s*=\s*"([^"]*)"|\bhref\s*=\s*'([^']*)'|\bhref\s*=\s*([^\s"'>]+)/i) || []).slice(1).find((x) => x !== undefined) || "").trim();
-    if (!found.describedby && rel.includes("describedby")) found.describedby = href || "(link element without href)";
-    if (!found.markdown && rel.includes("alternate") && type.startsWith("text/markdown")) found.markdown = href || "(link element without href)";
+    // The attribute name has to start the token. \b sits between the hyphen and the name,
+    // so data-rel, data-type and data-href were read as the real attributes until
+    // 2026-08-29, and a page could claim a relation it does not publish.
+    const rel = ((tag.match(/(?:^|[\s/])rel\s*=\s*["']?([^"'>]+)/i) || [])[1] || "").toLowerCase().trim().split(/\s+/);
+    const type = ((tag.match(/(?:^|[\s/])type\s*=\s*["']?([^"'>\s]+)/i) || [])[1] || "").toLowerCase();
+    const href = ((tag.match(/(?:^|[\s/])href\s*=\s*"([^"]*)"|(?:^|[\s/])href\s*=\s*'([^']*)'|(?:^|[\s/])href\s*=\s*([^\s"'>]+)/i) || []).slice(1).find((x) => x !== undefined) || "").trim();
+    // text/markdown, not anything that starts with it, and a relation without a target is
+    // not a relation: both passed until 2026-08-29.
+    const isMarkdown = type.split(";")[0].trim() === "text/markdown";
+    if (!found.describedby && href && rel.includes("describedby")) found.describedby = href;
+    if (!found.markdown && href && rel.includes("alternate") && isMarkdown) found.markdown = href;
   }
   for (const part of String(linkHeader || "").split(/,(?=\s*<)/)) {
     const lt = part.indexOf("<");
     const gt = lt === -1 ? -1 : part.indexOf(">", lt + 1);
     const href = (gt === -1 ? "" : part.slice(lt + 1, gt)).trim();
-    const rel = ((part.match(/rel\s*=\s*"?([^";,]+)"?/i) || [])[1] || "").toLowerCase().trim().split(/\s+/);
-    const type = ((part.match(/type\s*=\s*"?([^";,]+)"?/i) || [])[1] || "").toLowerCase().trim();
-    if (!found.describedby && rel.includes("describedby")) found.describedby = href || "(Link header without a target)";
-    if (!found.markdown && rel.includes("alternate") && type.startsWith("text/markdown")) found.markdown = href || "(Link header without a target)";
+    const rel = ((part.match(/(?:^|[;\s])rel\s*=\s*"?([^";,]+)"?/i) || [])[1] || "").toLowerCase().trim().split(/\s+/);
+    const type = ((part.match(/(?:^|[;\s])type\s*=\s*"?([^";,]+)"?/i) || [])[1] || "").toLowerCase().trim();
+    const isMarkdownHeader = type.split(";")[0].trim() === "text/markdown";
+    if (!found.describedby && href && rel.includes("describedby")) found.describedby = href;
+    if (!found.markdown && href && rel.includes("alternate") && isMarkdownHeader) found.markdown = href;
   }
   return found;
 }

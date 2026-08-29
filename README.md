@@ -28,10 +28,10 @@ The target has to be a public domain name: an IP literal, a bracketed IPv6 addre
 |---|-------|------|------|
 | 1 | File exists at /llms.txt, HTTP 200 (a same-site www/apex redirect is followed) | non-200, or an off-site or unsafe redirect | |
 | 2 | Response is plain text | body looks like HTML | content-type is not text/plain or text/markdown |
-| 3 | Starts with an H1 title | first non-empty line is not a markdown H1 | |
+| 3 | Starts with an H1 title | first non-empty line is not a markdown H1, indentation included, since four spaces make it a code block | |
 | 4 | Blockquote summary after the title | | missing one-line summary |
-| 5 | H2 sections group the content | | no H2 sections |
-| 6 | Markdown links an agent can follow | | no links, or relative links |
+| 5 | H2 sections group the content | | no H2 sections, or no section carrying a markdown file list |
+| 6 | Markdown links an agent can follow | | no links, an empty link name, a scheme without a host, or relative links |
 | 7 | Small enough to be cheap to read | | over 50 KB, or read truncated at 256 KB |
 | 8 | No HTML markup in the file | | HTML tags found |
 
@@ -39,8 +39,8 @@ Two more checks read the site's home page for the link relations v2 of the forma
 
 | # | Check | pass | info |
 |---|-------|------|------|
-| 9 | Home page points to its llms.txt (v2) | `rel="describedby"` found in the head or the Link header | not found, or the home page could not be read |
-| 10 | Home page points to a markdown version (v2) | `rel="alternate" type="text/markdown"` found in the head or the Link header | not found, or the home page could not be read |
+| 9 | Home page points to its llms.txt (v2) | `rel="describedby"` with a target, found in the head or the Link header | not found, no target on the relation, or the home page could not be read |
+| 10 | Home page points to a markdown version (v2) | `rel="alternate"` with the media type `text/markdown` and a target, found in the head or the Link header | not found, no target on the relation, a different media type, or the home page could not be read |
 
 ## Node API
 

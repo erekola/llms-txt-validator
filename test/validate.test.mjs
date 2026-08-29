@@ -299,3 +299,57 @@ test("validateHost cannot be pointed at another path by its caller options", asy
     assert.equal(asked[1], "https://ex.com/", "the second read is pinned to the home page");
   } finally { globalThis.fetch = orig; }
 });
+
+// Kuusi virhehyvaksyntaa, mitattu 2026-08-29. Jokainen naista palautti aiemmin passin,
+// eli validaattori sanoi kelvolliseksi tiedoston joka rikkoo formaattia. Jokaisella on
+// tassa myos positiivikontrolli, jotta testi ei voi menna vihreaksi siksi etta tarkistus
+// on aina punainen (mds/gotchas.md 2026-08-10 (jatko 1)).
+test("an indented code block is not the H1", () => {
+  const bad = validateLlmsTxt(good("    # Site\n\n> s\n\n## L\n\n- [a](https://a.example/x)\n"));
+  assert.equal(byId(bad, "h1-title").status, "fail");
+  const okay = validateLlmsTxt(good("   # Site\n\n> s\n\n## L\n\n- [a](https://a.example/x)\n"));
+  assert.equal(byId(okay, "h1-title").status, "pass", "three spaces is still a heading");
+});
+
+test("a section needs a file list, not a paragraph with a link in it", () => {
+  const bad = validateLlmsTxt(good("# T\n\n> s\n\n## L\n\nRead [a](https://a.example/x) first.\n"));
+  assert.equal(byId(bad, "sections").status, "warn");
+  assert.match(byId(bad, "sections").detail, /no file list/);
+  const okay = validateLlmsTxt(good("# T\n\n> s\n\n## L\n\n- [a](https://a.example/x)\n"));
+  assert.equal(byId(okay, "sections").status, "pass");
+  assert.match(byId(okay, "sections").detail, /1 carrying a file list/);
+});
+
+test("an entry with an empty link name is not a usable link", () => {
+  const bad = validateLlmsTxt(good("# T\n\n> s\n\n## L\n\n- [](https://a.example/x)\n"));
+  assert.equal(byId(bad, "links").status, "warn");
+  assert.match(byId(bad, "links").detail, /empty link name/);
+  const okay = validateLlmsTxt(good("# T\n\n> s\n\n## L\n\n- [a](https://a.example/x)\n"));
+  assert.equal(byId(okay, "links").status, "pass");
+});
+
+test("a scheme without a host is not an absolute link", () => {
+  const bad = validateLlmsTxt(good("# T\n\n> s\n\n## L\n\n- [a](https://)\n"));
+  assert.equal(byId(bad, "links").status, "warn");
+  assert.match(byId(bad, "links").detail, /no host/);
+  const okay = validateLlmsTxt(good("# T\n\n> s\n\n## L\n\n- [a](https://a.example/x)\n"));
+  assert.equal(byId(okay, "links").status, "pass");
+});
+
+test("data-rel and data-href are not the link relations", () => {
+  const f = findLinkRelations('<html><head><link data-rel="describedby" data-href="/llms.txt"><link data-rel="alternate" data-type="text/markdown" data-href="/a.md"></head></html>', "");
+  assert.equal(f.describedby, null);
+  assert.equal(f.markdown, null);
+  const real = findLinkRelations('<html><head><link rel="describedby" href="/llms.txt"><link rel="alternate" type="text/markdown" href="/a.md"></head></html>', "");
+  assert.equal(real.describedby, "/llms.txt");
+  assert.equal(real.markdown, "/a.md");
+});
+
+test("a relation without a target, and a media type that only starts right, are not relations", () => {
+  const noHref = findLinkRelations('<html><head><link rel="describedby"></head></html>', "");
+  assert.equal(noHref.describedby, null);
+  const nearlyMarkdown = findLinkRelations('<html><head><link rel="alternate" type="text/markdownish" href="/a.md"></head></html>', "");
+  assert.equal(nearlyMarkdown.markdown, null);
+  const withParam = findLinkRelations('<html><head><link rel="alternate" type="text/markdown;charset=utf-8" href="/a.md"></head></html>', "");
+  assert.equal(withParam.markdown, "/a.md", "a media type parameter is still text/markdown");
+});

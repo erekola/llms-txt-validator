@@ -1,5 +1,32 @@
 # turva-llms-txt-validator changelog
 
+## 0.3.0 (2026-08-29)
+
+Six inputs that break the format used to pass. They fail or warn now, and the hosted
+validator at turva.dev carries the same change, because it is the canonical copy and this
+package mirrors it.
+
+An indented line was read as a heading. The first non-empty line was trimmed before the H1
+test, so `    # Site` passed as the title even though four spaces of indent make it a code
+block. The line is now tested as markdown, with the three spaces CommonMark allows.
+
+A section without a file list counted as a section. The check matched `## ` and the link
+check scanned the whole file, so an H2 followed by a paragraph with a link in it satisfied
+both. A section now counts when it carries a markdown list with a link in it, and the detail
+line says how many of the sections do.
+
+An entry with an empty name and a target with no host counted as a link. `[](https://x/y)`
+gives an agent nothing to show and `https://` is a scheme without a host. Both warn now.
+
+The v2 discovery checks claimed relations the page does not publish. The attribute readers
+used `\b`, which matches inside `data-rel`, `data-type` and `data-href`, so a page could
+pass on attributes a browser never reads. A relation without a target passed as a relation.
+A media type only had to start with `text/markdown`, so `text/markdownish` passed. All three
+are fixed, and a media type parameter such as `text/markdown;charset=utf-8` still passes.
+
+Every one of the six carries a test with a positive control, and the six were run against
+the old code first to prove they go red on it.
+
 ## 0.2.1 (2026-08-24)
 
 The two v2 discovery checks now read the head a real HTML parser builds, and the code that
