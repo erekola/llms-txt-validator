@@ -1,5 +1,22 @@
 # turva-llms-txt-validator changelog
 
+## 0.3.1 (2026-08-29)
+
+A code scanning alert said the new section check runs in quadratic time on input the audited
+site chooses, and it was right. The check tested every line with a regular expression that
+rescanned the link target to the end of the line for each candidate on that line. A 300 kB
+llms.txt built from a list marker and `[a](` repeated took 8 563 ms to read before and takes
+17 ms now.
+
+The link check had the same shape with a bound in place of a fix. Its pattern stopped a target
+at 2 048 characters, which kept the pattern fast but dropped a longer target from the count, so
+a file whose only link carries a very long URL was told it has no links at all. Both checks now
+scan by index: every character is read once, there is no bound and no backtracking.
+
+One behaviour changed with it. A link whose target is longer than 2 048 characters now counts
+as a link. Fuzzing put both scans against the old patterns on 200 000 inputs each, and that is
+the only difference either one produces.
+
 ## 0.3.0 (2026-08-29)
 
 Six inputs that break the format used to pass. They fail or warn now, and the hosted

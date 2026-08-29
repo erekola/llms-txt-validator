@@ -103,6 +103,68 @@ export async function fetchLlmsTxt(host, opts = {}) {
   }
 }
 
+// Every markdown link in the file, scanned once from left to right instead of collected with
+// matchAll(/\[([^\][]*)\]\(([^)\s]{1,2048})\)/g). That bound meant a target longer than 2048
+// characters was not counted as a link at all, and dropping the bound from the pattern would
+// make it quadratic on a file that repeats "[a](" (Erik 2026-08-29). The scan carries no bound
+// and no backtracking: every character is read once and the furthest failed target scan is
+// remembered. matchAll resumes after a whole match, and so does this.
+function collectLinks(text) {
+  const out = [];
+  let failEnd = -1;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== "[") continue;
+    let j = i + 1;
+    while (j < text.length && text[j] !== "]" && text[j] !== "[") j++;
+    if (j >= text.length) break;
+    if (text[j] === "[") { i = j - 1; continue; }
+    if (text[j + 1] !== "(") { i = j; continue; }
+    const k = j + 2;
+    if (k <= failEnd) { i = j + 1; continue; }
+    let e = k;
+    while (e < text.length && text[e] !== ")" && !/\s/.test(text[e])) e++;
+    if (e > k && text[e] === ")") { out.push({ name: text.slice(i + 1, j), target: text.slice(k, e) }); i = e; continue; }
+    if (text[e] !== ")") failEnd = e;
+    i = j + 1;
+  }
+  return out;
+}
+
+// A markdown list item that carries a link, scanned once from left to right instead of
+// matched with /^ {0,3}[-*+] .*\[[^\][]*\]\([^)\s]+\)/. That pattern is quadratic on a line
+// such as "- " followed by "[a](" repeated, because every candidate rescans the target to the
+// end of the line, and the line comes from the audited site (CodeQL js/polynomial-redos,
+// 2026-08-29). Bounding the quantifier would trade the speed bug for a silent accuracy bug,
+// so the scan is by index: every character is read once and the furthest failed target scan
+// is remembered.
+function listItemHasLink(l) {
+  const m = /^ {0,3}[-*+] /.exec(l);
+  if (!m) return false;
+  const isSep = (c) => c === "\r" || c === "\n" || c === "\u2028" || c === "\u2029";
+  let failEnd = -1;
+  for (let i = m[0].length; i < l.length; i++) {
+    // A "." in the old pattern never crosses a line terminator, and split(/\r?\n/) leaves
+    // a bare CR, U+2028 and U+2029 inside a line, so a link behind one was not a match then
+    // and is not one now.
+    if (isSep(l[i])) return false;
+    if (l[i] !== "[") continue;
+    let j = i + 1, sep = false;
+    while (j < l.length && l[j] !== "]" && l[j] !== "[") { if (isSep(l[j])) sep = true; j++; }
+    if (j >= l.length) return false;
+    if (l[j] === "[") { if (sep) return false; i = j - 1; continue; }
+    if (l[j + 1] !== "(") { if (sep) return false; i = j; continue; }
+    const k = j + 2;
+    if (k <= failEnd) { if (sep) return false; i = j + 1; continue; }
+    let e = k;
+    while (e < l.length && l[e] !== ")" && !/\s/.test(l[e])) e++;
+    if (e > k && l[e] === ")") return true;
+    if (sep) return false;
+    if (l[e] !== ")") failEnd = e;
+    i = j + 1;
+  }
+  return false;
+}
+
 function redirectFailDetail(f) {
   if (f.reason === "off-host") return "redirects to " + f.location + ", a different host; llms.txt is host-scoped, so validate that host directly";
   if (f.reason === "unsafe-target") return "redirects to an unsupported target (" + f.location + "); only https redirects to the same site are followed";
@@ -160,7 +222,7 @@ export function validateLlmsTxt(f) {
     for (const l of lines) {
       if (/^## /.test(l)) { inSection = true; counted = false; continue; }
       if (/^# /.test(l)) { inSection = false; continue; }
-      if (inSection && !counted && /^ {0,3}[-*+] .*\[[^\][]*\]\([^)\s]+\)/.test(l)) { sectionsWithList++; counted = true; }
+      if (inSection && !counted && listItemHasLink(l)) { sectionsWithList++; counted = true; }
     }
   }
   if (h2Count > 0 && sectionsWithList > 0) {
@@ -170,12 +232,12 @@ export function validateLlmsTxt(f) {
   } else {
     add("sections", "warn", "H2 sections group the content", "no H2 sections found; sections are the convention for grouping links");
   }
-  const links = [...f.text.matchAll(/\[([^\][]*)\]\(([^)\s]{1,2048})\)/g)];
+  const links = collectLinks(f.text);
   // An entry an agent can use has a name and a target with a host. An empty name and a
   // bare "https://" both counted as valid absolute links until 2026-08-29.
-  const named = links.filter((m) => m[1].trim() !== "");
+  const named = links.filter((m) => m.name.trim() !== "");
   const unnamed = links.length - named.length;
-  const absolute = named.filter((m) => /^https?:\/\/[^/\s?#]+/.test(m[2])).length;
+  const absolute = named.filter((m) => /^https?:\/\/[^/\s?#]+/.test(m.target)).length;
   if (links.length === 0) {
     add("links", "warn", "Markdown links an agent can follow", "no markdown links found");
   } else if (unnamed > 0) {
@@ -183,7 +245,7 @@ export function validateLlmsTxt(f) {
   } else if (absolute === named.length) {
     add("links", "pass", "Markdown links an agent can follow", named.length + " link" + (named.length === 1 ? "" : "s") + ", all absolute URLs");
   } else {
-    const relativeCount = named.filter((m) => !/^[a-z][a-z0-9+.-]*:/i.test(m[2])).length;
+    const relativeCount = named.filter((m) => !/^[a-z][a-z0-9+.-]*:/i.test(m.target)).length;
     const hostless = named.length - absolute - relativeCount;
     add("links", "warn", "Markdown links an agent can follow", named.length + " links, " + relativeCount + " relative" + (hostless > 0 ? " and " + hostless + " with a scheme but no host" : "") + "; absolute URLs travel better when the file is read out of context");
   }
