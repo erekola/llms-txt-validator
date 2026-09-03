@@ -12,7 +12,19 @@ import { readFileSync } from "node:fs";
 export const VERSION = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8")
 ).version;
+// The hosted validator identifies itself without a version, because its version is the
+// site's and moves with every release; this package carries its own. The two strings
+// differ on purpose and nothing compares them (round 16 S3-6).
 const UA = "turva-llms-txt-validator/" + VERSION + " (+https://turva.dev/llms-txt-validator)";
+
+// Cut a string to at most n UTF-16 code units without leaving a lone high surrogate at the
+// end. String.prototype.slice counts code units, so a cut that lands inside a surrogate
+// pair leaves half of it, and that half serialises as bytes that are not valid UTF-8
+// (round 16 S3-1 and S3-2, measured on the hosted validator). Mirrors worker.js cut().
+export function cut(s, n) {
+  s = String(s).slice(0, n);
+  return /[\uD800-\uDBFF]$/.test(s) ? s.slice(0, -1) : s;
+}
 
 export function normalizeHostInput(raw) {
   let s = String(raw || "").trim().toLowerCase();
@@ -58,13 +70,13 @@ export async function fetchLlmsTxt(host, opts = {}) {
     if (res.status >= 300 && res.status < 400) {
       const loc = res.headers.get("location") || "";
       if (!loc) return { redirect: true, reason: "no-location", status: res.status, location: "" };
-      if (hop >= 4) return { redirect: true, reason: "too-many", status: res.status, location: loc.slice(0, 120) };
+      if (hop >= 4) return { redirect: true, reason: "too-many", status: res.status, location: cut(loc, 120) };
       let next;
-      try { next = new URL(loc, url); } catch { return { redirect: true, reason: "bad-location", status: res.status, location: loc.slice(0, 120) }; }
+      try { next = new URL(loc, url); } catch { return { redirect: true, reason: "bad-location", status: res.status, location: cut(loc, 120) }; }
       const safeTarget = next.protocol === "https:" && !next.port && !next.username && !next.password && isValidPublicHost(next.hostname);
       const twin = (next.hostname.startsWith("www.") ? next.hostname.slice(4) : next.hostname) === reqApex;
-      if (!safeTarget) return { redirect: true, reason: "unsafe-target", status: res.status, location: next.href.slice(0, 120) };
-      if (!twin) return { redirect: true, reason: "off-host", status: res.status, location: next.href.slice(0, 120) };
+      if (!safeTarget) return { redirect: true, reason: "unsafe-target", status: res.status, location: cut(next.href, 120) };
+      if (!twin) return { redirect: true, reason: "off-host", status: res.status, location: cut(next.href, 120) };
       if (!redirectedFrom) redirectedFrom = url;
       url = next.href;
       continue;
@@ -203,13 +215,13 @@ export function validateLlmsTxt(f) {
   // indented code block rather than a heading, and trimming erased that difference, so
   // "    # Site" passed as the H1 until 2026-08-29. CommonMark allows three spaces.
   if (/^ {0,3}# \S/.test(firstRaw)) {
-    add("h1-title", "pass", "Starts with an H1 title", JSON.stringify(first.slice(0, 80)));
+    add("h1-title", "pass", "Starts with an H1 title", JSON.stringify(cut(first, 80)));
   } else {
     add("h1-title", "fail", "Starts with an H1 title", "the first non-empty line should be a markdown H1 (# Site name)");
   }
   const afterH1 = lines.slice(firstIdx + 1).find((l) => l.trim() !== "") || "";
   if (afterH1.trim().startsWith("> ")) {
-    add("summary", "pass", "Blockquote summary after the title", JSON.stringify(afterH1.trim().slice(0, 80)));
+    add("summary", "pass", "Blockquote summary after the title", JSON.stringify(cut(afterH1.trim(), 80)));
   } else {
     add("summary", "warn", "Blockquote summary after the title", "recommended by the format (> one-line summary), not required");
   }
@@ -535,9 +547,9 @@ export function validateV2Discovery(found, unreadReason) {
     return checks;
   }
   add("v2-describedby", found.describedby ? "pass" : "info", "Home page points to its llms.txt (v2)",
-    found.describedby ? 'rel="describedby" to ' + found.describedby.slice(0, 120) : 'no rel="describedby" in the head or the Link header; v2 recommends it so an agent finds the file without guessing');
+    found.describedby ? 'rel="describedby" to ' + cut(found.describedby, 120) : 'no rel="describedby" in the head or the Link header; v2 recommends it so an agent finds the file without guessing');
   add("v2-markdown-alternate", found.markdown ? "pass" : "info", "Home page points to a markdown version (v2)",
-    found.markdown ? 'rel="alternate" type="text/markdown" to ' + found.markdown.slice(0, 120) : 'no rel="alternate" type="text/markdown" in the head or the Link header; v2 recommends it so an agent finds the markdown form without guessing');
+    found.markdown ? 'rel="alternate" type="text/markdown" to ' + cut(found.markdown, 120) : 'no rel="alternate" type="text/markdown" in the head or the Link header; v2 recommends it so an agent finds the markdown form without guessing');
   return checks;
 }
 
@@ -550,7 +562,7 @@ export function summarizeChecks(checks) {
 export async function validateHost(input, opts = {}) {
   const host = normalizeHostInput(input);
   if (!host || !isValidPublicHost(host)) {
-    throw new Error("not a public domain name: " + String(input).slice(0, 120));
+    throw new Error("not a public domain name: " + cut(input, 120));
   }
   // opts comes from the caller, and path and accept exist for this function's own
   // second read. Forwarding them to the first read would let a caller point the

@@ -1,6 +1,6 @@
 # turva-llms-txt-validator
 
-Validate a site's llms.txt structure from the command line, from Node or in CI. Eight structure checks, each reported as pass, warn or fail with a one-line detail, and two v2 discovery checks reported as information. No score on purpose: a structure check can say what is there and what is missing, and a number on top of ten checks would look like an agent-readiness score without measuring one.
+Validate a site's llms.txt structure from the command line, from Node or in CI. Eight structure checks, each reported as pass, warn or fail with a one-line detail, and two v2 discovery checks that read pass or info and never move the summary. No score on purpose: a structure check can say what is there and what is missing, and a number on top of ten checks would look like an agent-readiness score without measuring one.
 
 This is the open-source form of the hosted validator at [turva.dev/llms-txt-validator](https://turva.dev/llms-txt-validator), which runs the same logic inside the open [turva.dev Cloudflare Worker](https://github.com/erekola/turva-worker). The hosted validator stays canonical: if the two ever disagree, the hosted one wins and this package gets the fix.
 

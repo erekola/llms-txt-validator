@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateLlmsTxt, summarizeChecks, normalizeHostInput, isValidPublicHost, fetchLlmsTxt, findLinkRelations, validateV2Discovery, validateHost } from "../src/index.mjs";
+import { validateLlmsTxt, summarizeChecks, normalizeHostInput, isValidPublicHost, fetchLlmsTxt, findLinkRelations, validateV2Discovery, validateHost, cut } from "../src/index.mjs";
+import { execFileSync, spawnSync } from "node:child_process";
 
 const good = (text, extra = {}) => ({ status: 200, contentType: "text/plain; charset=utf-8", text, bytes: Buffer.byteLength(text), truncated: false, ...extra });
 const byId = (checks, id) => checks.find((c) => c.id === id);
@@ -352,4 +353,28 @@ test("a relation without a target, and a media type that only starts right, are 
   assert.equal(nearlyMarkdown.markdown, null);
   const withParam = findLinkRelations('<html><head><link rel="alternate" type="text/markdown;charset=utf-8" href="/a.md"></head></html>', "");
   assert.equal(withParam.markdown, "/a.md", "a media type parameter is still text/markdown");
+});
+
+test("a cut never ends in a lone high surrogate", () => {
+  const s = "a".repeat(79) + "\u{1F600}" + "b".repeat(20);
+  assert.equal(cut(s, 80), "a".repeat(79), "the cut lands inside the pair, so the pair is dropped whole");
+  assert.equal(cut(s, 81), "a".repeat(79) + "\u{1F600}", "a cut after the pair keeps it");
+  assert.equal(cut("abc", 80), "abc");
+  assert.ok(Buffer.from(cut(s, 80), "utf8").toString("utf8") === cut(s, 80), "the result round-trips as UTF-8");
+  const h1 = "# " + "x".repeat(78) + "\u{1F600}y\n\n> s\n\n## D\n\n- [a](https://example.com/a)\n";
+  const detail = byId(validateLlmsTxt(good(h1)), "h1-title").detail;
+  assert.ok(!/[\uD800-\uDBFF]$/.test(JSON.parse(detail)), "the H1 detail is cut on a code point boundary");
+});
+
+test("the CLI answers an error as JSON when --json was asked for", () => {
+  const cli = new URL("../bin/cli.mjs", import.meta.url).pathname;
+  const r = spawnSync(process.execPath, [cli, "not a host", "--json"], { encoding: "utf8" });
+  assert.equal(r.status, 2);
+  assert.equal(r.stderr, "", "nothing on stderr in JSON mode");
+  const body = JSON.parse(r.stdout);
+  assert.match(body.error, /not a public domain name/);
+  const plain = spawnSync(process.execPath, [cli, "not a host"], { encoding: "utf8" });
+  assert.equal(plain.status, 2);
+  assert.equal(plain.stdout, "");
+  assert.match(plain.stderr, /^error: not a public domain name/);
 });

@@ -1,5 +1,29 @@
 # turva-llms-txt-validator changelog
 
+## 0.3.2 (2026-09-03)
+
+A hostile reading of the package and of the hosted validator, round 16 of turva.dev's own
+audits, found four things and this release carries them.
+
+`--json` now answers every failure as JSON on stdout, `{"error": "..."}` with exit code 2, the
+way the hosted validator answers `Accept: application/json`. Before this, a rejected host or a
+failed first fetch printed plain text to stderr and nothing to stdout, so a CI step that parsed
+the output as JSON got an empty document on exactly the run it needed to read.
+
+A detail that is cut to 80 or 120 characters is now cut on a code point boundary. `slice`
+counts UTF-16 code units, and a cut that landed inside a surrogate pair left a lone high
+surrogate that serialises as bytes that are not valid UTF-8. The hosted validator had the same
+cut on the requester's own input and served invalid UTF-8 under a `charset=utf-8` header,
+measured on 3 September; both copies now share one `cut()` helper.
+
+The two GitHub Actions workflows pin `actions/checkout` and `actions/setup-node` to commit
+SHAs instead of the moving `v7` tags, so a moved tag upstream cannot run foreign code with the
+publish job's `id-token: write` permission.
+
+The README's first paragraph said the two v2 discovery checks are reported as information. They
+read `pass` when the relation is there and `info` when it is not, and neither moves the summary;
+the sentence now says that. The 0.1.1 entry below carries a dated correction about 0.1.0.
+
 ## 0.3.1 (2026-08-29)
 
 A code scanning alert said the new section check runs in quadratic time on input the audited
@@ -207,9 +231,14 @@ Restores the llms-txt-validate CLI command. npm rejected the ./-prefixed bin
 path at publish time and stripped the bin mapping from 0.1.0, so 0.1.0
 installs without the command. No code changes.
 
+Corrected 2026-09-03: the 0.1.0 publish never completed, so there is no 0.1.0 on
+the registry and nothing installs it; 0.1.1 is the first published version. The
+two sentences above describe what npm did to the attempted 0.1.0 tarball, not
+a version anyone can install.
+
 ## 0.1.0 (2026-07-18)
 
-First release. The seven structural checks of the hosted validator at
+Never published: see the correction under 0.1.1. First release as written at the time. The seven structural checks of the hosted validator at
 turva.dev/llms-txt-validator, extracted as an ES module with a CLI
 (llms-txt-validate), a node:test suite, and the same JSON result shape as the
 hosted endpoint.

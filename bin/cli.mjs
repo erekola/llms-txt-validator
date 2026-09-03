@@ -31,6 +31,11 @@ try {
   if (result.summary === "valid with warnings" && flags.has("--strict")) process.exit(1);
   process.exit(0);
 } catch (err) {
-  console.error("error: " + (err && err.message ? err.message : String(err)));
+  const message = err && err.message ? err.message : String(err);
+  // The hosted validator answers every failure as JSON when JSON was asked for, so a CI
+  // step that parses --json output gets {"error": ...} here too instead of an empty stdout
+  // and a plain-text stderr (round 16 S3-3). The exit code is unchanged.
+  if (flags.has("--json")) console.log(JSON.stringify({ error: message }, null, 2));
+  else console.error("error: " + message);
   process.exit(2);
 }
