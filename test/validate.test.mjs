@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { validateLlmsTxt, summarizeChecks, normalizeHostInput, isValidPublicHost, fetchLlmsTxt, findLinkRelations, validateV2Discovery, validateHost, cut } from "../src/index.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 const good = (text, extra = {}) => ({ status: 200, contentType: "text/plain; charset=utf-8", text, bytes: Buffer.byteLength(text), truncated: false, ...extra });
 const byId = (checks, id) => checks.find((c) => c.id === id);
@@ -367,7 +368,9 @@ test("a cut never ends in a lone high surrogate", () => {
 });
 
 test("the CLI answers an error as JSON when --json was asked for", () => {
-  const cli = new URL("../bin/cli.mjs", import.meta.url).pathname;
+  // fileURLToPath, not .pathname: on Windows the pathname is "/C:/..." and node reads that as
+  // "C:\C:\...", MODULE_NOT_FOUND, exit 1 (found 2026-09-05; CI is ubuntu-only and never saw it).
+  const cli = fileURLToPath(new URL("../bin/cli.mjs", import.meta.url));
   const r = spawnSync(process.execPath, [cli, "not a host", "--json"], { encoding: "utf8" });
   assert.equal(r.status, 2);
   assert.equal(r.stderr, "", "nothing on stderr in JSON mode");
