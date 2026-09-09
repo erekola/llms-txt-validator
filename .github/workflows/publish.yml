@@ -29,6 +29,18 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
       - run: npm ci
       - run: npm test
+
+      # The tag says which version is being published, npm publishes what package.json
+      # says, and nothing compared the two. A tag written by hand can therefore publish
+      # a different version than it names, and the release notes below would still be
+      # cut from the CHANGELOG section of the tag. This fails the run instead.
+      - name: The tag and package.json must name the same version
+        run: |
+          pkg=$(node -p "require('./package.json').version")
+          if [ "v$pkg" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match package.json version $pkg"
+            exit 1
+          fi
       - run: npm publish
 
       # The tag is also a release. Without this the repository shows tags and

@@ -5,10 +5,20 @@ permissions:
   contents: read
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Windows is in the matrix because the one Windows-only defect this package has had
+    # was a path bug the CLI test now guards (fileURLToPath, not URL.pathname), and a
+    # Linux-only matrix cannot see it come back. Node 24 is here because the publish
+    # workflow runs on 24 and a version tag was the first place that combination was
+    # ever tested. The supported minimum and the existing rows are unchanged.
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        node: [18, 20, 22]
+        os: [ubuntu-latest]
+        node: [18, 20, 22, 24]
+        include:
+          - os: windows-latest
+            node: 22
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

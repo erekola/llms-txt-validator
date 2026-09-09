@@ -1,5 +1,26 @@
 # turva-llms-txt-validator changelog
 
+## 0.3.3 (2026-09-09)
+
+An outside code review of the four repos found that the two llms.txt v2 discovery checks could
+be told a link relation the page does not publish, and this release carries the fix.
+
+`findLinkRelations` used to read `rel`, `type` and `href` with three independent regular
+expressions over the whole tag, and the Link response header the same way. Neither knew where a
+quoted value starts and ends, so `<link data-note=" rel='alternate' type='text/markdown'
+href='/fake.md'">` reported a markdown alternate, and so did a Link header whose `title`
+parameter happened to contain `rel=alternate; type=text/markdown`. Both now read null. HTML
+attributes come from one forward scan that tracks quotes and keeps the first declaration of a
+name, the way the HTML tokenizer does, and the Link header is parsed per RFC 8288 with quoted
+strings, quoted pairs and commas inside a quoted value handled where they occur.
+
+The two checks stay pass and info, the summary line and the `--strict` exit code are unchanged,
+and a real relation reads exactly as before, quoted, single quoted or bare. What changed is that
+a page can no longer claim one it does not serve.
+
+The CI matrix now also runs Windows and Node 24, and the publish workflow refuses to run when
+the version tag and package.json name different versions.
+
 ## 0.3.2 (2026-09-03)
 
 A hostile reading of the package and of the hosted validator, round 16 of turva.dev's own

@@ -494,6 +494,122 @@ function* htmlTags(text) {
   }
 }
 
+// One forward scan over a tag's attributes, quote aware, first declaration wins, which is
+// what the HTML tokenizer does. A quoted value is opaque: nothing inside it is an
+// attribute name, which is the whole point of reading the tag this way. The quote opens
+// only directly after "=", the same rule tagEnd uses to find the end of the tag, so the
+// two agree on where a value starts and ends.
+function tagAttributes(tag) {
+  const out = {};
+  const space = " \t\n\r\f";
+  const n = tag.length;
+  const open = /^<[a-z0-9]*/i.exec(tag);
+  let i = open ? open[0].length : 0;
+  while (i < n) {
+    const c = tag[i];
+    if (c === ">") break;
+    if (space.includes(c) || c === "/") { i++; continue; }
+    const nameStart = i;
+    while (i < n && !space.includes(tag[i]) && tag[i] !== "/" && tag[i] !== "=" && tag[i] !== ">") i++;
+    const name = tag.slice(nameStart, i).toLowerCase();
+    while (i < n && space.includes(tag[i])) i++;
+    let value = "";
+    if (tag[i] === "=") {
+      i++;
+      while (i < n && space.includes(tag[i])) i++;
+      const q = tag[i];
+      if (q === '"' || q === "'") {
+        i++;
+        const valueStart = i;
+        while (i < n && tag[i] !== q) i++;
+        value = tag.slice(valueStart, i);
+        if (i < n) i++;
+      } else {
+        const valueStart = i;
+        while (i < n && !space.includes(tag[i]) && tag[i] !== ">") i++;
+        value = tag.slice(valueStart, i);
+      }
+    }
+    if (name && !(name in out)) out[name] = value;
+  }
+  return out;
+}
+
+// RFC 8288 section 3: a Link header is a comma separated list, each value an angle
+// bracketed URI reference followed by semicolon separated parameters, and a parameter
+// value may be a quoted string that contains commas, semicolons and backslash escapes.
+// Reading rel and type with one regex over the whole value read the CONTENT of
+// title="note; rel=alternate; type=text/markdown" as parameters of the link.
+function parseLinkHeader(header) {
+  const s = String(header || "");
+  const space = " \t";
+  const n = s.length;
+  const out = [];
+  let i = 0;
+  while (i < n) {
+    while (i < n && (s[i] === "," || space.includes(s[i]))) i++;
+    if (i >= n) break;
+    if (s[i] !== "<") { i = nextLinkValue(s, i); continue; }
+    const gt = s.indexOf(">", i + 1);
+    if (gt === -1) break;
+    const href = s.slice(i + 1, gt).trim();
+    i = gt + 1;
+    const params = {};
+    while (i < n) {
+      while (i < n && space.includes(s[i])) i++;
+      if (i >= n) break;
+      if (s[i] === ",") { i++; break; }
+      if (s[i] !== ";") { i = nextLinkValue(s, i); break; }
+      i++;
+      while (i < n && space.includes(s[i])) i++;
+      const nameStart = i;
+      while (i < n && s[i] !== "=" && s[i] !== ";" && s[i] !== "," && !space.includes(s[i])) i++;
+      const name = s.slice(nameStart, i).toLowerCase();
+      while (i < n && space.includes(s[i])) i++;
+      let value = "";
+      if (s[i] === "=") {
+        i++;
+        while (i < n && space.includes(s[i])) i++;
+        if (s[i] === '"') {
+          i++;
+          let buf = "";
+          while (i < n && s[i] !== '"') {
+            if (s[i] === "\\" && i + 1 < n) { buf += s[i + 1]; i += 2; continue; }
+            buf += s[i];
+            i++;
+          }
+          if (i < n) i++;
+          value = buf;
+        } else {
+          const valueStart = i;
+          while (i < n && s[i] !== ";" && s[i] !== "," && !space.includes(s[i])) i++;
+          value = s.slice(valueStart, i);
+        }
+      }
+      if (name && !(name in params)) params[name] = value;
+    }
+    out.push({ href: href, params: params });
+  }
+  return out;
+}
+
+// Move to the start of the next comma separated value without stopping inside a quoted
+// string, so a comma in title="a, b" does not split one value into two.
+function nextLinkValue(s, from) {
+  let quote = "";
+  for (let j = from; j < s.length; j++) {
+    const c = s[j];
+    if (quote) {
+      if (c === "\\") { j++; continue; }
+      if (c === quote) quote = "";
+      continue;
+    }
+    if (c === '"') { quote = c; continue; }
+    if (c === ",") return j + 1;
+  }
+  return s.length;
+}
+
 // v2 of the llms.txt proposal (August 2026) left the file format alone and added one
 // thing: a page should say where its markdown version and its llms.txt are, using
 // rel="alternate" type="text/markdown" and rel="describedby", as HTML link elements or
@@ -513,24 +629,26 @@ export function findLinkRelations(html, linkHeader) {
     // NAME is "link<link", not as a link element, so \b would count a relation the site
     // does not publish. Measured against parse5, 2026-08-24.
     if (!/^<link(?=[\s/>])/i.test(tag)) continue;
-    // The attribute name has to start the token. \b sits between the hyphen and the name,
-    // so data-rel, data-type and data-href were read as the real attributes until
-    // 2026-08-29, and a page could claim a relation it does not publish.
-    const rel = ((tag.match(/(?:^|[\s/])rel\s*=\s*["']?([^"'>]+)/i) || [])[1] || "").toLowerCase().trim().split(/\s+/);
-    const type = ((tag.match(/(?:^|[\s/])type\s*=\s*["']?([^"'>\s]+)/i) || [])[1] || "").toLowerCase();
-    const href = ((tag.match(/(?:^|[\s/])href\s*=\s*"([^"]*)"|(?:^|[\s/])href\s*=\s*'([^']*)'|(?:^|[\s/])href\s*=\s*([^\s"'>]+)/i) || []).slice(1).find((x) => x !== undefined) || "").trim();
+    // Attributes come from ONE quote aware scan, not from three independent regex matches
+    // over the whole tag. Those three could not tell an attribute from the quoted CONTENT
+    // of another attribute, so data-note=" rel='alternate' type='text/markdown'
+    // href='/fake.md'" reported a relation the page does not publish. The earlier
+    // data-rel fix, 2026-08-29, moved the START of the name and does not reach this.
+    // Measured and fixed 2026-09-09.
+    const attrs = tagAttributes(tag);
+    const rel = (attrs.rel || "").toLowerCase().trim().split(/\s+/);
+    const type = (attrs.type || "").toLowerCase().trim();
+    const href = (attrs.href || "").trim();
     // text/markdown, not anything that starts with it, and a relation without a target is
     // not a relation: both passed until 2026-08-29.
     const isMarkdown = type.split(";")[0].trim() === "text/markdown";
     if (!found.describedby && href && rel.includes("describedby")) found.describedby = href;
     if (!found.markdown && href && rel.includes("alternate") && isMarkdown) found.markdown = href;
   }
-  for (const part of String(linkHeader || "").split(/,(?=\s*<)/)) {
-    const lt = part.indexOf("<");
-    const gt = lt === -1 ? -1 : part.indexOf(">", lt + 1);
-    const href = (gt === -1 ? "" : part.slice(lt + 1, gt)).trim();
-    const rel = ((part.match(/(?:^|[;\s])rel\s*=\s*"?([^";,]+)"?/i) || [])[1] || "").toLowerCase().trim().split(/\s+/);
-    const type = ((part.match(/(?:^|[;\s])type\s*=\s*"?([^";,]+)"?/i) || [])[1] || "").toLowerCase().trim();
+  for (const link of parseLinkHeader(linkHeader)) {
+    const href = link.href;
+    const rel = (link.params.rel || "").toLowerCase().trim().split(/\s+/);
+    const type = (link.params.type || "").toLowerCase().trim();
     const isMarkdownHeader = type.split(";")[0].trim() === "text/markdown";
     if (!found.describedby && href && rel.includes("describedby")) found.describedby = href;
     if (!found.markdown && href && rel.includes("alternate") && isMarkdownHeader) found.markdown = href;

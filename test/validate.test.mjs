@@ -338,6 +338,49 @@ test("a scheme without a host is not an absolute link", () => {
   assert.equal(byId(okay, "links").status, "pass");
 });
 
+// The same contract, written out in both implementations: the npm package and the hosted
+// validator in turva-worker/src/worker.js. The cases are stated against the EXPECTED
+// public behaviour, not against each other, because two copies agreeing proves only that
+// they are copies. Added 2026-09-09 after a quoted attribute value and a quoted Link
+// parameter both reported a relation the page does not publish.
+test("a quoted attribute value is not a place where attributes live", () => {
+  const f = findLinkRelations(`<head><link data-note=" rel='alternate' type='text/markdown' href='/fake.md'"></head>`, "");
+  assert.equal(f.markdown, null);
+  assert.equal(f.describedby, null);
+  const g = findLinkRelations(`<head><link title="rel=describedby href=/fake.txt"></head>`, "");
+  assert.equal(g.describedby, null);
+});
+
+test("a quoted Link parameter value is not a place where parameters live", () => {
+  const f = findLinkRelations("", '</fake.md>; title="note; rel=alternate; type=text/markdown"');
+  assert.equal(f.markdown, null);
+  const g = findLinkRelations("", '</fake.txt>; title="rel=describedby"');
+  assert.equal(g.describedby, null);
+});
+
+test("real relations still read, quoted, single quoted and bare", () => {
+  assert.equal(findLinkRelations('<head><link rel="alternate" type="text/markdown" href="/index.md">', "").markdown, "/index.md");
+  assert.equal(findLinkRelations("<head><link rel='alternate' type='text/markdown' href='/single.md'>", "").markdown, "/single.md");
+  assert.equal(findLinkRelations("<head><link rel=alternate type=text/markdown href=/bare.md>", "").markdown, "/bare.md");
+  assert.equal(findLinkRelations("<head><link rel='describedby' href='/llms.txt'>", "").describedby, "/llms.txt");
+  assert.equal(findLinkRelations("", '</index.md>; rel="alternate"; type="text/markdown"').markdown, "/index.md");
+  assert.equal(findLinkRelations("", "</index.md>; rel=alternate; type=text/markdown").markdown, "/index.md");
+});
+
+test("a comma or a semicolon inside a quoted Link parameter does not end the value", () => {
+  const f = findLinkRelations("", '</index.md>; title="one, two; three"; rel="alternate"; type="text/markdown"');
+  assert.equal(f.markdown, "/index.md");
+  const g = findLinkRelations("", '</a.txt>; title="a, b", </index.md>; rel="alternate"; type="text/markdown"');
+  assert.equal(g.markdown, "/index.md");
+  const h = findLinkRelations("", '</index.md>; title="he said \\"rel=describedby\\""; rel="alternate"; type="text/markdown"');
+  assert.equal(h.markdown, "/index.md");
+  assert.equal(h.describedby, null);
+});
+
+test("the first declaration of an attribute wins, as in the HTML tokenizer", () => {
+  assert.equal(findLinkRelations('<head><link rel="alternate" type="text/markdown" href="/first.md" href="/second.md">', "").markdown, "/first.md");
+});
+
 test("data-rel and data-href are not the link relations", () => {
   const f = findLinkRelations('<html><head><link data-rel="describedby" data-href="/llms.txt"><link data-rel="alternate" data-type="text/markdown" data-href="/a.md"></head></html>', "");
   assert.equal(f.describedby, null);
