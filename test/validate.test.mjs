@@ -424,3 +424,73 @@ test("the CLI answers an error as JSON when --json was asked for", () => {
   assert.equal(plain.stdout, "");
   assert.match(plain.stderr, /^error: not a public domain name/);
 });
+
+// Astra 2026-09-10 (F1). A fenced code block is an example, not the file's own structure,
+// and an H2 indented by up to three spaces is a heading CommonMark recognises. Both were
+// read the other way round: the fenced example counted as the file's only section and its
+// only link, and the correctly indented heading counted as no section at all. The same
+// cases run against the hosted twin in turva-worker/test/routes.test.mjs; the two
+// implementations answer identically by rule.
+test("a section and a link inside a code fence are not the file's own structure", () => {
+  for (const fence of ["```", "~~~"]) {
+    const text = "# Site\n> Summary\n\n" + fence + "\n## Docs\n- [Doc](https://example.com/doc)\n" + fence + "\n";
+    const checks = validateLlmsTxt(good(text));
+    assert.equal(byId(checks, "sections").status, "warn", fence + ": a fenced H2 is not a section");
+    assert.equal(byId(checks, "links").status, "warn", fence + ": a fenced link is not a link an agent can follow");
+    assert.equal(summarizeChecks(checks), "valid with warnings");
+  }
+});
+
+test("a fence that is closed still leaves the real sections after it countable", () => {
+  const text = "# Site\n> Summary\n\n```\n## Example\n- [Nope](https://example.com/nope)\n```\n\n## Docs\n\n- [Guide](https://example.com/guide)\n";
+  const checks = validateLlmsTxt(good(text));
+  assert.equal(byId(checks, "sections").status, "pass");
+  assert.match(byId(checks, "sections").detail, /^1 section/, "the fenced H2 is not counted, the real one is");
+  assert.equal(byId(checks, "links").detail, "1 link, all absolute URLs", "only the link outside the fence");
+});
+
+test("an H2 indented by one to three spaces is still a section", () => {
+  for (const pad of [" ", "  ", "   "]) {
+    const text = "# Site\n> Summary\n\n" + pad + "## Docs\n" + pad + "- [Doc](https://example.com/doc)\n";
+    const checks = validateLlmsTxt(good(text));
+    assert.equal(byId(checks, "sections").status, "pass", pad.length + " spaces: heading");
+    assert.equal(summarizeChecks(checks), "valid", pad.length + " spaces: the file is valid, so --strict does not reject it");
+  }
+  // Four spaces is an indented code block, the same boundary the H1 check has used since
+  // 2026-08-29, so it is NOT a heading.
+  const code = "# Site\n> Summary\n\n    ## Docs\n    - [Doc](https://example.com/doc)\n";
+  assert.equal(byId(validateLlmsTxt(good(code)), "sections").status, "warn", "four spaces is code, not a heading");
+});
+
+test("an unclosed fence swallows the rest of the file, and that is the correct reading", () => {
+  const text = "# Site\n> Summary\n\n```\n## Docs\n- [Doc](https://example.com/doc)\n";
+  const checks = validateLlmsTxt(good(text));
+  assert.equal(byId(checks, "sections").status, "warn");
+  assert.equal(byId(checks, "links").status, "warn");
+});
+
+test("a redirect body is released before the next hop and before every refusal", async () => {
+  const mk = (make) => async () => make();
+  const run = async (build) => {
+    let calls = 0, cancelled = 0;
+    const real = globalThis.fetch;
+    const body = () => ({ cancel: async () => { cancelled++; }, getReader: () => { throw new Error("the redirect body must not be read"); } });
+    globalThis.fetch = mk(() => build(++calls, body));
+    try { return { out: await fetchLlmsTxt("example.com"), calls, cancelled }; } finally { globalThis.fetch = real; }
+  };
+  const followed = await run((n, body) => n === 1
+    ? { status: 302, headers: new Headers({ location: "https://www.example.com/llms.txt" }), body: body() }
+    : new Response("# Site", { headers: { "content-type": "text/plain" } }));
+  assert.equal(followed.calls, 2);
+  assert.equal(followed.cancelled, 1, "the hop's body is cancelled, not left to the collector");
+  const refused = await run((n, body) => ({ status: 302, headers: new Headers({ location: "https://muu.example.org/llms.txt" }), body: body() }));
+  assert.equal(refused.out.reason, "off-host", "the refusal itself is unchanged");
+  assert.equal(refused.cancelled, 1, "a refusal releases the body too");
+  // A cancel that throws must not turn a redirect verdict into a thrown error.
+  let calls = 0;
+  const real = globalThis.fetch;
+  globalThis.fetch = async () => (++calls === 1
+    ? { status: 302, headers: new Headers({ location: "https://www.example.com/llms.txt" }), body: { cancel: async () => { throw new Error("cancel failed"); } } }
+    : new Response("# Site", { headers: { "content-type": "text/plain" } }));
+  try { assert.equal((await fetchLlmsTxt("example.com")).status, 200); } finally { globalThis.fetch = real; }
+});

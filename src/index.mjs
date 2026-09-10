@@ -68,6 +68,11 @@ export async function fetchLlmsTxt(host, opts = {}) {
       headers: { "user-agent": opts.userAgent ?? UA, "accept": opts.accept ?? "text/plain, text/markdown;q=0.9, */*;q=0.1" }
     });
     if (res.status >= 300 && res.status < 400) {
+      // Six paths leave this branch, five returns and one continue, and not one of them
+      // ever reads the redirect body. undici holds the connection until a body is read or
+      // cancelled, so it is released here, once, before the location is even parsed. A
+      // failed cancel must not turn a redirect verdict into a throw (2026-09-10).
+      try { await res.body?.cancel(); } catch { /* the verdict below is the answer */ }
       const loc = res.headers.get("location") || "";
       if (!loc) return { redirect: true, reason: "no-location", status: res.status, location: "" };
       if (hop >= 4) return { redirect: true, reason: "too-many", status: res.status, location: cut(loc, 120) };
@@ -149,6 +154,41 @@ function collectLinks(text) {
 // 2026-08-29). Bounding the quantifier would trade the speed bug for a silent accuracy bug,
 // so the scan is by index: every character is read once and the furthest failed target scan
 // is remembered.
+// CommonMark fenced code blocks, marked line by line. A "## " or a link inside a fence is
+// example text and not the file's own structure, but until 2026-09-10 both counted, so a
+// file whose only section and only link lived inside ``` or ~~~ was reported valid. The
+// scan is one pass over the lines with no backtracking pattern, because the ReDoS repair
+// of 2026-08-24 bought a worse accuracy defect with a bounded quantifier and the rule out
+// of it was to scan by index instead (mds/gotchas.md 2026-08-24 (jatko 12)).
+// Returns one boolean per line: true for a fence line and for everything inside it.
+function fenceMask(lines) {
+  const mask = new Array(lines.length).fill(false);
+  let fenceChar = "", fenceLen = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    let p = 0;
+    while (p < 4 && l[p] === " ") p++;
+    if (p > 3) { mask[i] = fenceChar !== ""; continue; }
+    const c = l[p];
+    let run = 0;
+    if (c === "`" || c === "~") { while (l[p + run] === c) run++; }
+    if (fenceChar === "") {
+      // An opening backtick fence may not carry a backtick in its info string; a tilde
+      // fence may. Anything shorter than three markers is not a fence at all. A later
+      // round will read the consequence as a bug and it is not: in ```js `x` the info
+      // string holds a backtick, so that line is prose, and a bare ``` after it OPENS a
+      // block instead of closing one. CommonMark reads the same input the same way,
+      // measured against the spec 2026-09-10. Leave it.
+      if (run >= 3 && (c !== "`" || l.indexOf("`", p + run) === -1)) {
+        fenceChar = c; fenceLen = run; mask[i] = true;
+      }
+      continue;
+    }
+    mask[i] = true;
+    if (c === fenceChar && run >= fenceLen && l.slice(p + run).trim() === "") { fenceChar = ""; fenceLen = 0; }
+  }
+  return mask;
+}
 function listItemHasLink(l) {
   const m = /^ {0,3}[-*+] /.exec(l);
   if (!m) return false;
@@ -225,15 +265,22 @@ export function validateLlmsTxt(f) {
   } else {
     add("summary", "warn", "Blockquote summary after the title", "recommended by the format (> one-line summary), not required");
   }
-  const h2Count = (f.text.match(/^## /gm) || []).length;
+  // Headings are read outside fences only, and with the same indentation the H1 check and
+  // listItemHasLink have allowed since 2026-08-29. Until 2026-09-10 this one line still
+  // demanded column zero, so a correct file indented by one to three spaces was reported as
+  // having no sections at all while its list under the same indentation counted fine.
+  const fenced = fenceMask(lines);
+  const h2Count = lines.filter((l, i) => !fenced[i] && /^ {0,3}## /.test(l)).length;
   // A section counts when it carries a file list. An H2 followed by a paragraph satisfied
   // this check until 2026-08-29, and the format puts each section's links in a list.
   let sectionsWithList = 0;
   {
     let inSection = false, counted = false;
-    for (const l of lines) {
-      if (/^## /.test(l)) { inSection = true; counted = false; continue; }
-      if (/^# /.test(l)) { inSection = false; continue; }
+    for (let i = 0; i < lines.length; i++) {
+      const l = lines[i];
+      if (fenced[i]) continue;
+      if (/^ {0,3}## /.test(l)) { inSection = true; counted = false; continue; }
+      if (/^ {0,3}# /.test(l)) { inSection = false; continue; }
       if (inSection && !counted && listItemHasLink(l)) { sectionsWithList++; counted = true; }
     }
   }
@@ -244,7 +291,9 @@ export function validateLlmsTxt(f) {
   } else {
     add("sections", "warn", "H2 sections group the content", "no H2 sections found; sections are the convention for grouping links");
   }
-  const links = collectLinks(f.text);
+  // Links are collected from the prose only, for the same reason the headings are: a link
+  // shown inside a code fence is an example of a link, not one an agent can follow.
+  const links = collectLinks(lines.filter((l, i) => !fenced[i]).join("\n"));
   // An entry an agent can use has a name and a target with a host. An empty name and a
   // bare "https://" both counted as valid absolute links until 2026-08-29.
   const named = links.filter((m) => m.name.trim() !== "");
