@@ -4,14 +4,14 @@ Check a website's `llms.txt` from the command line, Node or CI. Get a clear resu
 
 **Eight structure checks and two informational discovery checks.** The result describes the file's structure and the home page's discovery links. It does not measure overall agent readiness or predict AI-search citations.
 
-[Try it in your browser](https://turva.dev/llms-txt-validator) · [llms.txt guide](https://turva.dev/guides/llms-txt) · [All turva.dev tools](https://turva.dev/tools)
+[npm package](https://www.npmjs.com/package/turva-llms-txt-validator) · [Try it in your browser](https://turva.dev/llms-txt-validator) · [llms.txt guide](https://turva.dev/guides/llms-txt) · [All turva.dev tools](https://turva.dev/tools)
 
 ## Quick start
 
 Requires **Node.js 18.17 or newer**. Run it without a global install:
 
 ```sh
-npx turva-llms-txt-validator example.com
+npx --yes turva-llms-txt-validator example.com
 ```
 
 Replace `example.com` with the domain you want to check. A domain, HTTP URL or HTTPS URL is accepted. Validation uses the host's `/llms.txt` and home page over HTTPS, regardless of the supplied path.
@@ -51,7 +51,7 @@ The two discovery checks return `pass` or `info`. They never change the summary 
 Use JSON for automation and strict mode when warnings should fail a CI step:
 
 ```sh
-npx turva-llms-txt-validator example.com --json --strict
+npx --yes turva-llms-txt-validator example.com --json --strict
 ```
 
 Completed validation returns `{ target, summary, checks }`. Each check contains `{ id, status, label, detail }`. With `--json`, input and fetch errors return `{ "error": "..." }` and exit with code `2`.
@@ -112,7 +112,7 @@ Add this step to a GitHub Actions job that already has Node.js 18.17 or newer av
 
 ```yaml
 - name: Validate llms.txt
-  run: npx turva-llms-txt-validator your-domain.com --strict
+  run: npx --yes turva-llms-txt-validator your-domain.com --strict
 ```
 
 The same command works in Woodpecker and other runners with Node installed. Omit `--strict` if warnings should remain advisory.
@@ -143,6 +143,16 @@ curl -H "Accept: application/json" "https://turva.dev/llms-txt-validator?url=exa
 In Windows PowerShell, use `curl.exe` if `curl` resolves to `Invoke-WebRequest`.
 
 The package has no runtime dependencies. The repository's release workflow uses npm trusted publishing with provenance. See [SECURITY.md](SECURITY.md) for details and [CHANGELOG.md](CHANGELOG.md) for releases.
+
+## Check HTML and Markdown content
+
+[markdown-parity-check](https://www.npmjs.com/package/markdown-parity-check) compares the main content of a page's two representations. Use it when you need to find changed text, numbers, links or blocks after checking llms.txt. It requires Node.js 22 or newer:
+
+```sh
+npx --yes markdown-parity-check --url https://example.com/page --format json
+```
+
+Replace the URL with your page. If Markdown is served at another address, add `--markdown-url https://example.com/page.md`. See the [comparison README](https://github.com/erekola/markdown-parity-check) for local-file mode and reporting limits.
 
 ## License
 
