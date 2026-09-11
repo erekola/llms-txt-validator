@@ -132,7 +132,7 @@ For vulnerability reporting and supported versions, see [SECURITY.md](SECURITY.m
 
 ## Hosted version and source
 
-This package follows the validation logic used by the [hosted validator](https://turva.dev/llms-txt-validator), whose source is in the [turva.dev Cloudflare Worker](https://github.com/erekola/turva-worker). The hosted validator is the canonical implementation: if results diverge, this package is updated to match it.
+The [hosted validator](https://turva.dev/llms-txt-validator) accepts any public domain in the browser. It requests the same two documents, `/llms.txt` and the home page, and runs the same checks. Its source is in the [turva.dev Cloudflare Worker](https://github.com/erekola/turva-worker). The hosted validator is the canonical implementation: if results diverge, this package is updated to match it.
 
 The hosted version also returns JSON with the same result shape:
 
@@ -146,15 +146,14 @@ The package has no runtime dependencies. The repository's release workflow uses 
 
 ## Check HTML and Markdown content
 
-[markdown-parity-check](https://www.npmjs.com/package/markdown-parity-check) compares the main content of a page's two representations. Use it when you need to find changed text, numbers, links or blocks after checking llms.txt. It requires Node.js 22 or newer:
+[markdown-parity-check](https://github.com/erekola/markdown-parity-check) is a separate tool for a different question. This validator reads the structure of `llms.txt` and the home page's discovery links. The parity check compares the main content of one page's HTML and Markdown versions and reports changed text, numbers, links or blocks. It requires Node.js 22 or newer:
 
 ```sh
 npx --yes markdown-parity-check --url https://example.com/page --format json
 ```
 
-Replace the URL with your page. If Markdown is served at another address, add `--markdown-url https://example.com/page.md`. See the [comparison README](https://github.com/erekola/markdown-parity-check) for local-file mode and reporting limits.
+Replace the URL with your page. If Markdown is served at another address, add `--markdown-url https://example.com/page.md`. Its [browser version](https://turva.dev/markdown-parity-check) on turva.dev checks turva.dev's own pages only. See the [comparison README](https://github.com/erekola/markdown-parity-check) for local-file mode, exit codes and limits.
 
 ## License
 
 [MIT](LICENSE). Built by [Erik Rekola](https://github.com/erekola) at [turva.dev](https://turva.dev).
-
