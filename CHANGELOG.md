@@ -1,5 +1,38 @@
 # turva-llms-txt-validator changelog
 
+## 0.3.4 (2026-09-12)
+
+A second outside review of the public repos found that the two v2 discovery checks read some pages
+differently from an HTML parser. A differential fuzz against parse5, run while fixing those cases,
+found more of the same kind, and an independent verifier of the fix found two more faults in the
+same scan. This release fixes all of them.
+
+Attribute values are now decoded the way the HTML tokenizer decodes them. `rel="described&#98;y"`
+used to read as no relation, and `href="/llms.txt?a=1&amp;b=2"` was reported with `&amp;` still in
+it. Named references come from the full WHATWG list and follow the attribute rule for a name
+without its semicolon, and numeric references follow the replacement rules. The Link response
+header is not HTML, so it is read as before.
+
+Lowercasing and whitespace follow the tokenizer's ASCII rules. JavaScript's `toLowerCase` turns
+U+0130 into two code units, which moved every index after it, so a relation after
+`<title>İ</title>` was lost. A no-break space between head elements counted as whitespace, but a
+parser starts the body there, so a link after it was reported even though the head does not carry
+it. A carriage return inside a value is now read as a line feed, because a parser turns CRLF and CR
+into LF before it tokenizes anything.
+
+A tag now ends where the tokenizer ends it. An `=` where an attribute name is expected starts a
+name, and so does a second `=` right after a quoted value, so a quote after it no longer hides a
+`>`. A bogus comment or a doctype ends at its first `>`, and an end tag such as `</bodyx>` is no
+longer read as `</body>`.
+
+The search for the end of a comment was quadratic on a page that never uses the `--!>` ending,
+which is almost every page. 100 KB of short comments took 770 ms, and the search is now one linear
+pass.
+
+After the fix, 0 of 390 000 generated documents read differently from parse5, and the generators
+were written by two authors, one of them the outside verifier. The two checks still report only
+pass or info, and the summary line and the `--strict` exit code are unchanged. Nothing else changed.
+
 ## 0.3.3 (2026-09-09)
 
 An outside code review of the four repos found that the two llms.txt v2 discovery checks could

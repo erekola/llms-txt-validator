@@ -279,7 +279,7 @@ test("the parser survives the shapes a real page throws at it", () => {
   assert.equal(findLinkRelations('<head><link rel="alternate" type="text/markdown; charset=utf-8" href="/a.md"></head>', "").markdown, "/a.md");
   assert.equal(findLinkRelations('<head><link rel="alternate stylesheet" type="text/css" href="/a.css"></head>', "").markdown, null);
   assert.equal(findLinkRelations('<head><link rel="DescribedBy" HREF="/LLMS.txt"></head>', "").describedby, "/LLMS.txt");
-  // No </head> at all: the body is scanned rather than reporting nothing found.
+  // Without explicit head tags, this link belongs to the implied head.
   assert.equal(findLinkRelations('<link rel="describedby" href="/llms.txt">', "").describedby, "/llms.txt");
   // A comma inside the URL of a Link header must not split the header value.
   const hdr = '</a,b.md>; rel="alternate"; type="text/markdown", </llms.txt>; rel="describedby"';
@@ -494,4 +494,79 @@ test("a redirect body is released before the next hop and before every refusal",
     ? { status: 302, headers: new Headers({ location: "https://www.example.com/llms.txt" }), body: { cancel: async () => { throw new Error("cancel failed"); } } }
     : new Response("# Site", { headers: { "content-type": "text/plain" } }));
   try { assert.equal((await fetchLlmsTxt("example.com")).status, 200); } finally { globalThis.fetch = real; }
+});
+
+// Found by a second outside review of the public repos, 2026-09-12 (character references in an
+// attribute, U+0130 moving indexes, NBSP in the head), and by a differential fuzz against parse5 while
+// fixing them (the same ASCII rules at their other sites, and the tokenizer states around "="). Every
+// expected value below is what parse5 puts in the head, checked case by case before the tests were
+// written, and the Link header cases are read per RFC 8288, where HTML references do not apply.
+test("attribute values are read after their character references are decoded", () => {
+  // A numeric reference inside rel.
+  assert.equal(findLinkRelations("<head><link rel=\"described&#98;y\" href=\"/llms.txt\"></head>", "").describedby, "/llms.txt");
+  // &amp; in a query string.
+  assert.equal(findLinkRelations("<head><link rel=\"describedby\" href=\"/llms.txt?a=1&amp;b=2\"></head>", "").describedby, "/llms.txt?a=1&b=2");
+  // Named and hex references in unquoted values.
+  assert.equal(findLinkRelations("<head><link rel=&#x61;lternate type=text&sol;markdown href=/a&period;md></head>", "").markdown, "/a.md");
+  // Single quotes, a legacy name without its semicolon at a quote, uppercase X.
+  assert.equal(findLinkRelations("<head><link rel='describedby' href='/x&lt;y&#X3E;z&gt'></head>", "").describedby, "/x<y>z>");
+  // A legacy name is not decoded when a letter, a digit or = follows.
+  assert.equal(findLinkRelations("<head><link rel=\"describedby\" href=\"/x?a=1&ampb=2&amp=3&amp\"></head>", "").describedby, "/x?a=1&ampb=2&amp=3&");
+  // Zero, a surrogate, past U+10FFFF, the windows-1252 range, and a longest match.
+  assert.equal(findLinkRelations("<head><link rel=\"describedby\" href=\"/&#0;&#xD800;&#x110000;&#128;&#x9D;&notin;&notit;\"></head>", "").describedby, "/\ufffd\ufffd\ufffd\u20ac\u009d\u2209&notit;");
+  // A decoded quote does not end a value.
+  assert.equal(findLinkRelations("<head><link title=\"&quot; rel=describedby href=/fake\" rel=\"alternate\"></head>", "").describedby, null);
+  // The Link header is not HTML, so a reference in it stays as written.
+  assert.equal(findLinkRelations("", "</llms.txt?a=1&amp;b=2>; rel=\"describedby\"").describedby, "/llms.txt?a=1&amp;b=2");
+});
+
+test("case and whitespace follow the HTML tokenizer, which knows only ASCII", () => {
+  // U+0130 in a title.
+  assert.equal(findLinkRelations("<head><title>\u0130</title><link rel=\"describedby\" href=\"/llms.txt\"></head>", "").describedby, "/llms.txt");
+  // U+0130 in a comment.
+  assert.equal(findLinkRelations("<head><!--\u0130--><link rel=\"describedby\" href=\"/llms.txt\"></head>", "").describedby, "/llms.txt");
+  // U+212A is not an ASCII k.
+  assert.equal(findLinkRelations("<head><link rel=\"alternate\" type=\"text/mar\u212adown\" href=\"/a.md\"></head>", "").markdown, null);
+  // NBSP between head elements starts the body.
+  assert.equal(findLinkRelations("<head>\u00a0<link rel=\"describedby\" href=\"/llms.txt\"></head>", "").describedby, null);
+  // The five HTML whitespace characters keep the head open.
+  assert.equal(findLinkRelations("<head> \t\n\r\f<link rel=\"describedby\" href=\"/llms.txt\"></head>", "").describedby, "/llms.txt");
+  // NBSP does not separate rel tokens.
+  assert.equal(findLinkRelations("<head><link rel=\"describedby\u00a0alternate\" href=\"/llms.txt\"></head>", "").describedby, null);
+  // NBSP does not end a tag name.
+  assert.equal(findLinkRelations("<head><link\u00a0x rel=\"describedby\" href=\"/llms.txt\"></head>", "").describedby, null);
+  // The Link header still reads when the HTML finds nothing.
+  assert.equal(findLinkRelations("<head>\u00a0<link rel=\"describedby\" href=\"/fake\"></head>", "</llms.txt>; rel=\"describedby\"").describedby, "/llms.txt");
+});
+
+test("a tag ends where the tokenizer ends it, not at a quote after any \"=\"", () => {
+  // An end tag that only starts with body is ignored in the head.
+  assert.equal(findLinkRelations("<head></bodyx><link rel=\"describedby\" href=\"/llms.txt\"></head>", "").describedby, "/llms.txt");
+  // A bogus comment ends at the first >, quote or not.
+  assert.equal(findLinkRelations("<head><!x a=\"><link rel=\"describedby\" href=\"/llms.txt\"></head>", "").describedby, "/llms.txt");
+  // A second = after a quoted value starts a name, and the > in it ends the tag.
+  assert.equal(findLinkRelations("<head><link a=\"x\"=\">\" rel=\"describedby\" href=\"/fake\"></head>", "").describedby, null);
+  // An = where a name is expected starts a name.
+  assert.equal(findLinkRelations("<head><link =\">\" rel=\"describedby\" href=\"/fake\"></head>", "").describedby, null);
+  // A tag that ends in such a name leaves the next tag in the head.
+  assert.equal(findLinkRelations("<head><link a=\"x\"=><link rel=\"describedby\" href=\"/llms.txt\"></head>", "").describedby, "/llms.txt");
+  // A > inside a quoted value still does not end the tag.
+  assert.equal(findLinkRelations("<head><link data-x=\"a>b\" rel=\"describedby\" href=\"/llms.txt\"></head>", "").describedby, "/llms.txt");
+});
+
+// Found by the independent verifier of the fix above, 2026-09-12. A parser tokenizes an input
+// stream whose CRLF and CR have already become LF, and a page's own comments must not make the
+// head scan quadratic: 256 KB of short comments took about five seconds before.
+test("a CR in the head reads as LF, as it does after a parser's input preprocessing", () => {
+  assert.equal(findLinkRelations('<head><link rel="describedby" href="a\rb"></head>', "").describedby, "a\nb");
+  assert.equal(findLinkRelations('<head><link rel="describedby" href="a\r\nb"></head>', "").describedby, "a\nb");
+  assert.equal(findLinkRelations('<head>\r\n<link rel="describedby" href="/llms.txt">\r</head>', "").describedby, "/llms.txt");
+});
+
+test("many comments in the head are scanned in linear time", () => {
+  const html = "<head>" + "<!--x-->".repeat(32000) + '<link rel="describedby" href="/llms.txt"></head>';
+  const started = Date.now();
+  assert.equal(findLinkRelations(html, "").describedby, "/llms.txt");
+  const took = Date.now() - started;
+  assert.ok(took < 2000, "took " + took + " ms");
 });
