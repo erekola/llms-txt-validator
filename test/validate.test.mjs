@@ -302,10 +302,10 @@ test("validateHost cannot be pointed at another path by its caller options", asy
   } finally { globalThis.fetch = orig; }
 });
 
-// Kuusi virhehyvaksyntaa, mitattu 2026-08-29. Jokainen naista palautti aiemmin passin,
-// eli validaattori sanoi kelvolliseksi tiedoston joka rikkoo formaattia. Jokaisella on
-// tassa myos positiivikontrolli, jotta testi ei voi menna vihreaksi siksi etta tarkistus
-// on aina punainen (mds/gotchas.md 2026-08-10 (jatko 1)).
+// Six false acceptances, measured 2026-08-29. Each of these used to return a pass,
+// so the validator called a file valid that breaks the format. Each one also carries a
+// positive control here, so the test cannot go green because the check is always red
+// (mds/gotchas.md 2026-08-10 (jatko 1)).
 test("an indented code block is not the H1", () => {
   const bad = validateLlmsTxt(good("    # Site\n\n> s\n\n## L\n\n- [a](https://a.example/x)\n"));
   assert.equal(byId(bad, "h1-title").status, "fail");
