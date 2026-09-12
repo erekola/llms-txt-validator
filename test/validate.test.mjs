@@ -412,7 +412,8 @@ test("a cut never ends in a lone high surrogate", () => {
 
 test("the CLI answers an error as JSON when --json was asked for", () => {
   // fileURLToPath, not .pathname: on Windows the pathname is "/C:/..." and node reads that as
-  // "C:\C:\...", MODULE_NOT_FOUND, exit 1 (found 2026-09-05; CI is ubuntu-only and never saw it).
+  // "C:\C:\...", MODULE_NOT_FOUND, exit 1. Found 2026-09-05, when CI ran on Ubuntu only and
+  // could not see it; ci.yml has carried a windows-latest row since.
   const cli = fileURLToPath(new URL("../bin/cli.mjs", import.meta.url));
   const r = spawnSync(process.execPath, [cli, "not a host", "--json"], { encoding: "utf8" });
   assert.equal(r.status, 2);

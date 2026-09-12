@@ -19,8 +19,10 @@ const UA = "turva-llms-txt-validator/" + VERSION + " (+https://turva.dev/llms-tx
 
 // Cut a string to at most n UTF-16 code units without leaving a lone high surrogate at the
 // end. String.prototype.slice counts code units, so a cut that lands inside a surrogate
-// pair leaves half of it, and that half serialises as bytes that are not valid UTF-8
-// (round 16 S3-1 and S3-2, measured on the hosted validator). Mirrors worker.js cut().
+// pair leaves half of it, and the character is lost. How the half is written depends on
+// the runtime: Node's UTF-8 encoder replaces it with U+FFFD, and the hosted validator in
+// workerd wrote three bytes that were not valid UTF-8 (round 16 S3-1 and S3-2, measured
+// there 2026-09-03). Mirrors worker.js cut().
 export function cut(s, n) {
   s = String(s).slice(0, n);
   return /[\uD800-\uDBFF]$/.test(s) ? s.slice(0, -1) : s;
@@ -147,13 +149,6 @@ function collectLinks(text) {
   return out;
 }
 
-// A markdown list item that carries a link, scanned once from left to right instead of
-// matched with /^ {0,3}[-*+] .*\[[^\][]*\]\([^)\s]+\)/. That pattern is quadratic on a line
-// such as "- " followed by "[a](" repeated, because every candidate rescans the target to the
-// end of the line, and the line comes from the audited site (CodeQL js/polynomial-redos,
-// 2026-08-29). Bounding the quantifier would trade the speed bug for a silent accuracy bug,
-// so the scan is by index: every character is read once and the furthest failed target scan
-// is remembered.
 // CommonMark fenced code blocks, marked line by line. A "## " or a link inside a fence is
 // example text and not the file's own structure, but until 2026-09-10 both counted, so a
 // file whose only section and only link lived inside ``` or ~~~ was reported valid. The
@@ -189,6 +184,13 @@ function fenceMask(lines) {
   }
   return mask;
 }
+// A markdown list item that carries a link, scanned once from left to right instead of
+// matched with /^ {0,3}[-*+] .*\[[^\][]*\]\([^)\s]+\)/. That pattern is quadratic on a line
+// such as "- " followed by "[a](" repeated, because every candidate rescans the target to the
+// end of the line, and the line comes from the audited site (CodeQL js/polynomial-redos,
+// 2026-08-29). Bounding the quantifier would trade the speed bug for a silent accuracy bug,
+// so the scan is by index: every character is read once and the furthest failed target scan
+// is remembered.
 function listItemHasLink(l) {
   const m = /^ {0,3}[-*+] /.exec(l);
   if (!m) return false;
@@ -670,8 +672,11 @@ export function findLinkRelations(html, linkHeader) {
   // Only the head, and only what a parser would put there: a commented-out link element,
   // one inside a script or a template, and one the parser moves into the body are all not
   // what these two checks are about, and counting them would report a relation the site
-  // does not serve. See headOfDocument above for the rules shape by shape. The 64 KB bound
-  // is a cap on work, not a rule: a head longer than that is not a head.
+  // does not serve. See headOfDocument above for the rules shape by shape.
+  // The scan reads only the first 65,536 UTF-16 code units of what headOfDocument returns.
+  // The cap applies after the head is collected, so it bounds this tag scan and not the head
+  // parse, and a relation declared past it is not found here. The Link response header is
+  // read separately below.
   const head = headOfDocument(html).slice(0, 65536);
   for (const tag of htmlTags(head)) {
     // The name has to END at "link": a real parser reads "<link<link" as ONE tag whose
