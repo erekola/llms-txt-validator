@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateLlmsTxt, summarizeChecks, normalizeHostInput, isValidPublicHost, fetchLlmsTxt, findLinkRelations, validateV2Discovery, validateHost, cut, maskLocation } from "../src/index.mjs";
+import { validateLlmsTxt, summarizeChecks, normalizeHostInput, isValidPublicHost, fetchLlmsTxt, findLinkRelations, validateV2Discovery, validateHost, cut, maskLocation, stripBidi } from "../src/index.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -642,4 +642,86 @@ test("0.3.5 later reviews: a refused target hides everything up to its last @ be
   assert.equal(maskLocation("https://admin:se/c@" + SECRET + "@internal.example/x"), "https://***@internal.example/x");
   assert.equal(maskLocation("https://good.example:99999/a.png"), "https://good.example:99999/a.png");
   assert.equal(maskLocation("https://good.example/a@2x.png"), "https://good.example/a@2x.png");
+});
+
+// Round 19 (2026-09-23): two more fixes mirrored from worker.js v3.164.0, found in a
+// hostile audit of the public repos. K7-2 is the counterpart of the 0.3.5 tests above: an
+// ACCEPTED redirect's target was shown as sent, not masked, so a query value or a fragment
+// in a same-host Location reached the http-status detail unmasked. V6-U1 is unrelated to
+// redirects: text quoted from the fetched file (the H1, the summary) kept bidirectional
+// control characters, which can make a check's detail read in a different order than the
+// file itself.
+
+test("an accepted redirect target is masked too, credentials query and fragment alike (round 19, K7-2)", () => {
+  const text = "# Example\n\n> One line.\n\n## Docs\n\n- [Guide](https://example.com/guide)\n";
+  const checks = validateLlmsTxt(good(text, {
+    redirectedFrom: "https://user:" + SECRET + "@example.com/llms.txt",
+    finalUrl: "https://www.example.com/llms.txt?session=" + QSECRET + "#frag"
+  }));
+  const http = byId(checks, "http-status");
+  assert.equal(http.status, "pass");
+  assert.equal(http.detail, "HTTP 200, followed a redirect from https://example.com/llms.txt to https://www.example.com/llms.txt?session=***");
+  assert.doesNotMatch(http.detail, new RegExp(SECRET + "|" + QSECRET + "|frag"));
+});
+
+test("a same-host redirect with a query and a fragment is masked once accepted (round 19, K7-2, fetchLlmsTxt integration)", async () => {
+  const orig = globalThis.fetch;
+  globalThis.fetch = async (u) => (u === "https://ex.com/llms.txt" ? mkRedirect(301, "https://ex.com/llms.txt?session=" + QSECRET + "#frag") : mkOk("# Ex\n\n> One line.\n\n## Docs\n\n- [Guide](https://example.com/guide)\n"));
+  try {
+    const f = await fetchLlmsTxt("ex.com");
+    assert.equal(f.redirectedFrom, "https://ex.com/llms.txt");
+    assert.match(f.finalUrl, new RegExp(QSECRET));
+    const http = byId(validateLlmsTxt(f), "http-status");
+    assert.equal(http.detail, "HTTP 200, followed a redirect from https://ex.com/llms.txt to https://ex.com/llms.txt?session=***");
+    assert.doesNotMatch(http.detail, new RegExp(QSECRET + "|frag"));
+  } finally { globalThis.fetch = orig; }
+});
+
+test("stripBidi removes bidi controls and leaves ordinary text alone", () => {
+  assert.equal(stripBidi("plain text"), "plain text");
+  assert.equal(stripBidi("a\u202Eb\u2066c\u2069d"), "abcd");
+  assert.equal(stripBidi(42), "42");
+});
+
+test("validateHost strips bidirectional controls from every check's detail (round 19, V6-U1)", async () => {
+  const rlo = "\u202E";
+  const text = "# Site" + rlo + "name\n\n> Summary" + rlo + "line.\n\n## Docs\n\n- [Guide](https://example.com/guide)\n";
+  const orig = globalThis.fetch;
+  globalThis.fetch = async (u) => (new URL(u).pathname === "/llms.txt" ? mkOk(text) : mkOk("<html><head></head></html>"));
+  try {
+    const result = await validateHost("ex.com");
+    const h1 = byId(result.checks, "h1-title");
+    const summary = byId(result.checks, "summary");
+    assert.equal(h1.detail, JSON.stringify("# Sitename"));
+    assert.equal(summary.detail, JSON.stringify("> Summaryline."));
+    assert.doesNotMatch(JSON.stringify(result), new RegExp(rlo));
+  } finally { globalThis.fetch = orig; }
+});
+
+test("the public-host gate refuses the arpa and onion TLDs (round 19, P3)", () => {
+  assert.equal(isValidPublicHost("router.home.arpa"), false);
+  assert.equal(isValidPublicHost("1.0.0.127.in-addr.arpa"), false);
+  assert.equal(isValidPublicHost("b.a.ip6.arpa"), false);
+  assert.equal(isValidPublicHost("duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion"), false);
+  // Only the last label counts: a public name that merely contains the words stays public.
+  assert.equal(isValidPublicHost("arpa.example.com"), true);
+  assert.equal(isValidPublicHost("onion.example.com"), true);
+});
+
+test("one trailing dot on a typed host names the same host (round 19, K7-P5)", async () => {
+  assert.equal(normalizeHostInput("example.com."), "example.com");
+  assert.equal(normalizeHostInput("https://EXAMPLE.com./path"), "example.com");
+  // Only one dot goes: two leave a name the gate still refuses, and a bare dot stays a dot.
+  assert.equal(normalizeHostInput("example.com.."), "example.com.");
+  assert.equal(isValidPublicHost(normalizeHostInput("example.com..")), false);
+  assert.equal(isValidPublicHost(normalizeHostInput("localhost.")), false);
+  assert.equal(isValidPublicHost(normalizeHostInput("router.home.arpa.")), false);
+  const asked = [];
+  const orig = globalThis.fetch;
+  globalThis.fetch = async (u) => { asked.push(String(u)); return mkOk(new URL(u).pathname === "/llms.txt" ? "# Site\n\n> Summary.\n" : "<html><head></head></html>"); };
+  try {
+    const result = await validateHost("example.com.");
+    assert.equal(result.target, "https://example.com/llms.txt");
+    assert.equal(asked[0], "https://example.com/llms.txt");
+  } finally { globalThis.fetch = orig; }
 });

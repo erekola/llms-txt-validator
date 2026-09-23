@@ -63,6 +63,14 @@ export function maskLocation(href, base) {
   return at < from ? s : s.slice(0, from) + "***@" + s.slice(at + 1);
 }
 
+// Unicode bidi controls (U+202A to U+202E, U+2066 to U+2069) have no place in a check's
+// detail: text quoted from the fetched file could otherwise read in a different order here
+// than in the file itself, and the right-to-left override is the classic way to do that
+// (round 19, V6-U1). Mirrors worker.js stripBidi().
+export function stripBidi(s) {
+  return String(s).replace(/[\u202A-\u202E\u2066-\u2069]/g, "");
+}
+
 export function normalizeHostInput(raw) {
   let s = String(raw || "").trim().toLowerCase();
   if (!s) return null;
@@ -72,7 +80,10 @@ export function normalizeHostInput(raw) {
   if (u.protocol !== "https:" && u.protocol !== "http:") return null;
   if (u.port && u.port !== "443" && u.port !== "80") return null;
   if (u.username || u.password) return null;
-  return u.hostname;
+  // One trailing dot names the same host in absolute form, so "example.com." is read as
+  // example.com instead of refused (round 19, K7-P5). Mirrors worker.js normalizeHostInput().
+  const typedHost = u.hostname;
+  return typedHost.length > 1 && typedHost.endsWith(".") ? typedHost.slice(0, -1) : typedHost;
 }
 
 export function isValidPublicHost(host) {
@@ -80,7 +91,9 @@ export function isValidPublicHost(host) {
   if (host.startsWith("[") || /^\d+\.\d+\.\d+\.\d+$/.test(host)) return false;
   if (!/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{1,62}$/.test(host)) return false;
   const tld = host.split(".").pop();
-  if (["localhost", "local", "internal", "home", "lan", "corp", "test", "invalid"].includes(tld)) return false;
+  // arpa and onion since round 19 (P3): home.arpa is the home-network name of RFC 8375,
+  // in-addr.arpa and ip6.arpa name addresses, and an onion name never resolves on the public web.
+  if (["localhost", "local", "internal", "home", "lan", "corp", "test", "invalid", "arpa", "onion"].includes(tld)) return false;
   return true;
 }
 
@@ -272,7 +285,10 @@ export function validateLlmsTxt(f) {
     add("http-status", "fail", "File exists at /llms.txt", "expected HTTP 200, got " + f.status);
     return checks;
   }
-  add("http-status", "pass", "File exists at /llms.txt", f.redirectedFrom ? "HTTP 200, followed a redirect from " + f.redirectedFrom + " to " + f.finalUrl : "HTTP 200");
+  // An accepted redirect is shown masked as well (round 19, K7-2, mirrored from worker.js
+  // v3.164.0): a query value or a fragment in a same-host Location used to reach this
+  // detail as sent.
+  add("http-status", "pass", "File exists at /llms.txt", f.redirectedFrom ? "HTTP 200, followed a redirect from " + maskLocation(f.redirectedFrom) + " to " + maskLocation(f.finalUrl) : "HTTP 200");
   const ct = (f.contentType || "").toLowerCase();
   const looksHtml = /^\s*(<!doctype|<html|<head|<body)/i.test(f.text);
   if (looksHtml) {
@@ -1254,5 +1270,9 @@ export async function validateHost(input, opts = {}) {
     discovery = validateV2Discovery(null, "the home page could not be read, so this was not measured");
   }
   const checks = validateLlmsTxt(fetched).concat(discovery);
-  return { target: "https://" + host + "/llms.txt", summary: summarizeChecks(checks), checks };
+  // Text quoted from the fetched file leaves without bidirectional controls (round 19,
+  // V6-U1, mirrored from worker.js v3.164.0): a site's own H1 or summary could otherwise
+  // read in another order here than in the file itself.
+  const stripped = checks.map((c) => (typeof c.detail === "string" ? { ...c, detail: stripBidi(c.detail) } : c));
+  return { target: "https://" + host + "/llms.txt", summary: summarizeChecks(stripped), checks: stripped };
 }

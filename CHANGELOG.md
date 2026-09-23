@@ -1,5 +1,31 @@
 # turva-llms-txt-validator changelog
 
+## 0.3.6 (2026-09-23)
+
+Turva's own internal audit round 19 of the hosted validator found two gaps this package still had,
+and the same round changed the host check in two places.
+
+K7-2: an accepted same-host redirect showed its target as sent, not masked. The `http-status`
+check's detail for a followed redirect read "HTTP 200, followed a redirect from X to Y", and Y could
+carry a query value or a fragment untouched, while a refused redirect was already masked in the
+previous release. Both X and Y now go through `maskLocation`.
+
+V6-U1: text quoted from the fetched file, today the `h1-title` and `summary` checks, kept the
+bidirectional control characters U+202A to U+202E and U+2066 to U+2069. A site's own H1 or
+blockquote summary could use one of these, the right-to-left override being the common case, to make
+a check's detail read in a different order than the line it quotes. `validateHost` now passes every
+check's detail through the new export `stripBidi` before it returns.
+
+P3: the host check refuses two more TLDs, `arpa` and `onion`. RFC 8375 reserves `home.arpa` for home
+networks, `in-addr.arpa` and `ip6.arpa` name addresses and not sites, and an onion name does not
+resolve on the public web.
+
+K7-P5: a host given with one trailing dot, such as `example.com.`, is the same host in its absolute
+form. It was refused as not a public name and is now read as `example.com`. Only one dot is removed,
+and a redirect target that ends in a dot is still refused.
+
+All four changes mirror the hosted validator in worker.js. 8 new tests, 68 total.
+
 ## 0.3.5 (2026-09-22)
 
 An outside review of the public repos found that a refused redirect could repeat credentials from
