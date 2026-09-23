@@ -123,7 +123,7 @@ The default validation requests two documents: `https://<host>/llms.txt` and `ht
 
 - Timeout: eight seconds per document, shared across its redirect chain.
 - Read limit: 256 KB per response.
-- Redirects: up to four hops, over HTTPS, to the same host or its `www`/apex equivalent. Off-site redirects, embedded credentials and unsupported ports are rejected.
+- Redirects: up to four hops, over HTTPS, to the same host or its `www`/apex equivalent. Off-site redirects, embedded credentials and unsupported ports are rejected. A rejected target is reported with its credentials and fragment removed and its query values masked.
 - Host checks: IP literals, bracketed IPv6 addresses, localhost and the internal-use TLDs `local`, `internal`, `home`, `lan`, `corp`, `test` and `invalid` are rejected before a request is sent. Redirect targets are checked too.
 
 **DNS resolution is not checked for private addresses.** A syntactically public domain can resolve to a private IP, so if you expose this package through a service that accepts untrusted domains, enforce private-address restrictions at the network layer. Local and CI runs use their own network policy. The hosted validator runs on the Cloudflare edge.

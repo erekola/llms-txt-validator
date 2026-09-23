@@ -1,5 +1,22 @@
 # turva-llms-txt-validator changelog
 
+## 0.3.5 (2026-09-22)
+
+An outside review of the public repos found that a refused redirect could repeat credentials from
+its target. A site can answer the llms.txt request with a redirect to an address such as
+`https://user:password@host/llms.txt`. The fetch refused that redirect as it should, but the user
+name and the password stayed in the returned `location` and in the detail of the first check, and a
+shared report or a CI log would carry them from there.
+
+A refused redirect target is now masked before it is cut to 120 characters, because a cut is not a
+mask. The user name and the password are removed, the query values are masked as `***` and the
+fragment is dropped. The same masking covers all four refusals: the unsafe target above, a target on
+another host, a target the URL parser cannot read and the last hop of a chain that stops because it
+has more than four redirects. When the parser cannot read a target, nothing tells which `@` ends the
+user information, so everything up to the last `@` before the query is shown as `***`, and so is the
+whole query. The new export `maskLocation` does the masking. Redirects are still refused and never
+followed.
+
 ## 0.3.4 (2026-09-12)
 
 A second outside review of the public repos found that the two v2 discovery checks read some pages

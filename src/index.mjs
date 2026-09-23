@@ -28,6 +28,41 @@ export function cut(s, n) {
   return /[\uD800-\uDBFF]$/.test(s) ? s.slice(0, -1) : s;
 }
 
+// A redirect target the way a report may show it. The scheme, the host and the path stay readable,
+// and the parts that can carry a secret do not: the user name and the password are removed, every
+// query value becomes ***, and the fragment is dropped. The caller cuts the result to length
+// afterwards, because a cut is not a mask. Up to 0.3.4 a refused redirect to
+// https://user:password@host/ kept both in the check's detail and in the returned location (outside
+// review, 2026-09-22). A target the URL parser refuses is masked by hand: nothing after the first ?
+// or # survives, and when the target has a scheme or starts with two slashes, everything up to the
+// last @ before them is shown as ***. Mirrors worker.js maskLocation().
+export function maskLocation(href, base) {
+  let u = null;
+  try { u = new URL(href, base); } catch { u = null; }
+  if (u) {
+    u.username = "";
+    u.password = "";
+    for (const key of Array.from(u.searchParams.keys())) u.searchParams.set(key, "***");
+    u.hash = "";
+    return u.href;
+  }
+  let s = String(href).replace(/[\t\n\r]/g, "");
+  const stop = s.search(/[?#]/);
+  if (stop >= 0) s = s.slice(0, stop) + (s[stop] === "?" ? "?***" : "");
+  const scheme = /^[a-z][a-z0-9+.-]*:/i.exec(s);
+  const start = scheme ? scheme[0].length : 0;
+  let from = start;
+  while (from < s.length && (s[from] === "/" || s[from] === "\\")) from++;
+  // Without a scheme and two slashes there is no authority, and an @ is part of a path.
+  if (!scheme && from - start < 2) return s;
+  // Nothing tells which @ of a refused target ends the user information, so everything up to the
+  // last one is shown as ***. The mask is visible on purpose: three review rounds on 2026-09-22
+  // measured every rule that guessed, and each one either returned a password that holds a slash
+  // or made the host vanish without a trace.
+  const at = s.lastIndexOf("@");
+  return at < from ? s : s.slice(0, from) + "***@" + s.slice(at + 1);
+}
+
 export function normalizeHostInput(raw) {
   let s = String(raw || "").trim().toLowerCase();
   if (!s) return null;
@@ -77,13 +112,13 @@ export async function fetchLlmsTxt(host, opts = {}) {
       try { await res.body?.cancel(); } catch { /* the verdict below is the answer */ }
       const loc = res.headers.get("location") || "";
       if (!loc) return { redirect: true, reason: "no-location", status: res.status, location: "" };
-      if (hop >= 4) return { redirect: true, reason: "too-many", status: res.status, location: cut(loc, 120) };
+      if (hop >= 4) return { redirect: true, reason: "too-many", status: res.status, location: cut(maskLocation(loc, url), 120) };
       let next;
-      try { next = new URL(loc, url); } catch { return { redirect: true, reason: "bad-location", status: res.status, location: cut(loc, 120) }; }
+      try { next = new URL(loc, url); } catch { return { redirect: true, reason: "bad-location", status: res.status, location: cut(maskLocation(loc, url), 120) }; }
       const safeTarget = next.protocol === "https:" && !next.port && !next.username && !next.password && isValidPublicHost(next.hostname);
       const twin = (next.hostname.startsWith("www.") ? next.hostname.slice(4) : next.hostname) === reqApex;
-      if (!safeTarget) return { redirect: true, reason: "unsafe-target", status: res.status, location: cut(next.href, 120) };
-      if (!twin) return { redirect: true, reason: "off-host", status: res.status, location: cut(next.href, 120) };
+      if (!safeTarget) return { redirect: true, reason: "unsafe-target", status: res.status, location: cut(maskLocation(next.href), 120) };
+      if (!twin) return { redirect: true, reason: "off-host", status: res.status, location: cut(maskLocation(next.href), 120) };
       if (!redirectedFrom) redirectedFrom = url;
       url = next.href;
       continue;

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateLlmsTxt, summarizeChecks, normalizeHostInput, isValidPublicHost, fetchLlmsTxt, findLinkRelations, validateV2Discovery, validateHost, cut } from "../src/index.mjs";
+import { validateLlmsTxt, summarizeChecks, normalizeHostInput, isValidPublicHost, fetchLlmsTxt, findLinkRelations, validateV2Discovery, validateHost, cut, maskLocation } from "../src/index.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -569,4 +569,77 @@ test("many comments in the head are scanned in linear time", () => {
   assert.equal(findLinkRelations(html, "").describedby, "/llms.txt");
   const took = Date.now() - started;
   assert.ok(took < 2000, "took " + took + " ms");
+});
+
+// 0.3.5: a refused redirect target reaches the result and the check's detail masked. An outside
+// review on 2026-09-22 showed a synthetic user name and password in a Location header surviving in
+// both. Every value here is synthetic, and fetch is replaced in memory.
+const SECRET = "SYNTHETICPASSWORDNOTREAL";
+const QSECRET = "SYNTHETICQUERYNOTREAL";
+
+async function refused(location) {
+  const orig = globalThis.fetch;
+  const asked = [];
+  globalThis.fetch = async (u) => { asked.push(u); return mkRedirect(302, location); };
+  try {
+    const f = await fetchLlmsTxt("ex.com");
+    return { f, asked, checks: validateLlmsTxt(f) };
+  } finally { globalThis.fetch = orig; }
+}
+
+test("maskLocation drops credentials, query values and the fragment and keeps host and path", () => {
+  assert.equal(maskLocation("https://user:" + SECRET + "@example.com/llms.txt?token=" + QSECRET + "#f"), "https://example.com/llms.txt?token=***");
+  assert.equal(maskLocation("/other?token=" + QSECRET, "https://ex.com/llms.txt"), "https://ex.com/other?token=***");
+  assert.equal(maskLocation("https://user:" + SECRET + "@exa mple.com/p?k=" + QSECRET), "https://***@exa mple.com/p?***");
+  assert.equal(maskLocation("https://example.com/@user/llms.txt"), "https://example.com/@user/llms.txt");
+});
+
+test("an unsafe redirect with credentials is refused, not followed, and masked in result and detail", async () => {
+  const { f, asked, checks } = await refused("https://user:" + SECRET + "@ex.com/llms.txt?token=" + QSECRET);
+  assert.equal(f.reason, "unsafe-target");
+  assert.equal(asked.length, 1);
+  assert.equal(f.location, "https://ex.com/llms.txt?token=***");
+  assert.match(checks[0].detail, /unsupported target/);
+  assert.doesNotMatch(JSON.stringify({ f, checks }), new RegExp(SECRET + "|" + QSECRET + "|user"));
+});
+
+test("an off-host redirect is masked the same way before it is cut", async () => {
+  const { f, checks } = await refused("https://user:" + SECRET + "@other.example/" + "a".repeat(80) + "?token=" + QSECRET + "#frag");
+  assert.equal(f.reason, "unsafe-target");
+  const plain = await refused("https://other.example/llms.txt?token=" + QSECRET + "#frag");
+  assert.equal(plain.f.reason, "off-host");
+  assert.equal(plain.f.location, "https://other.example/llms.txt?token=***");
+  assert.match(plain.checks[0].detail, /different host/);
+  assert.doesNotMatch(JSON.stringify([f, checks, plain]), new RegExp(SECRET + "|" + QSECRET + "|frag"));
+});
+
+test("an unparseable and a too-many Location are masked too", async () => {
+  const bad = await refused("https://user:" + SECRET + "@exa mple.com/llms.txt?k=" + QSECRET);
+  assert.equal(bad.f.reason, "bad-location");
+  assert.doesNotMatch(bad.f.location, new RegExp(SECRET + "|" + QSECRET));
+  const orig = globalThis.fetch;
+  globalThis.fetch = async (u) => mkRedirect(301, u.startsWith("https://ex.com/") ? "https://www.ex.com/llms.txt?t=" + QSECRET : "/llms.txt?t=" + QSECRET);
+  try {
+    const f = await fetchLlmsTxt("ex.com");
+    assert.equal(f.reason, "too-many");
+    assert.doesNotMatch(f.location, new RegExp(QSECRET));
+  } finally { globalThis.fetch = orig; }
+});
+
+test("0.3.5 review: a slash inside the password does not stop the masking of an unparseable target", async () => {
+  const { f } = await refused("https://admin:" + SECRET + "/tail@internal.example/llms.txt?k=" + QSECRET);
+  assert.equal(f.reason, "bad-location");
+  assert.doesNotMatch(f.location, new RegExp(SECRET + "|" + QSECRET + "|admin"));
+  assert.match(f.location, /internal[.]example[/]llms[.]txt/);
+  assert.equal(maskLocation("path@2x.png"), "path@2x.png");
+});
+
+test("0.3.5 later reviews: a refused target hides everything up to its last @ behind a visible mask", () => {
+  assert.equal(maskLocation("https://good.example:99999/a@2x.png"), "https://***@2x.png");
+  assert.equal(maskLocation("https://good.example:abc/a@2x.png?k=1"), "https://***@2x.png?***");
+  assert.equal(maskLocation("https://admin:pw/tail@internal.example/a@2x.png"), "https://***@2x.png");
+  assert.equal(maskLocation("https://ad min:1234/tail@internal.example/x"), "https://***@internal.example/x");
+  assert.equal(maskLocation("https://admin:se/c@" + SECRET + "@internal.example/x"), "https://***@internal.example/x");
+  assert.equal(maskLocation("https://good.example:99999/a.png"), "https://good.example:99999/a.png");
+  assert.equal(maskLocation("https://good.example/a@2x.png"), "https://good.example/a@2x.png");
 });
