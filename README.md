@@ -14,7 +14,7 @@ Requires **Node.js 18.17 or newer**. Run it without a global install:
 npx --yes turva-llms-txt-validator example.com
 ```
 
-Replace `example.com` with the domain you want to check. A domain, HTTP URL or HTTPS URL is accepted. Validation uses the host's `/llms.txt` and home page over HTTPS, regardless of the supplied path.
+Replace `example.com` with the domain you want to check. A domain, HTTP URL or HTTPS URL is accepted. Validation uses the host's `/llms.txt` and home page over HTTPS, regardless of the supplied path. If the address has a path other than `/` or `/llms.txt`, the result names that path first in an `info` line.
 
 For repeated use, install the CLI globally:
 
@@ -65,7 +65,7 @@ Completed validation returns `{ target, summary, checks }`. Each check contains 
 | 1 | `/llms.txt` returns HTTP 200 | Non-200 response, rejected or excessive redirects | none |
 | 2 | Response is plain text | Body looks like an HTML page | Content type is neither `text/plain` nor `text/markdown` |
 | 3 | First non-empty line is a Markdown H1 | Missing H1, including a title indented as a code block | none |
-| 4 | Blockquote summary follows the title | none | Missing summary |
+| 4 | Blockquote summary follows the title | none | Missing summary, or a blockquote after other text but before the first H2, named by its line |
 | 5 | H2 sections group the content | none | No H2 sections, or no section contains a Markdown link list |
 | 6 | Markdown links have names and absolute HTTP or HTTPS targets | none | Missing links, empty names, relative targets or unsupported targets |
 | 7 | File is small enough to read cheaply | none | Over 50 KB, or truncated at the 256 KB read limit |

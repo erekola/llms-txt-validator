@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateLlmsTxt, summarizeChecks, normalizeHostInput, isValidPublicHost, fetchLlmsTxt, findLinkRelations, validateV2Discovery, validateHost, cut, maskLocation, stripBidi } from "../src/index.mjs";
+import { validateLlmsTxt, summarizeChecks, normalizeHostInput, isValidPublicHost, fetchLlmsTxt, findLinkRelations, validateV2Discovery, validateHost, cut, maskLocation, stripBidi, enteredPath } from "../src/index.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -723,5 +723,54 @@ test("one trailing dot on a typed host names the same host (round 19, K7-P5)", a
     const result = await validateHost("example.com.");
     assert.equal(result.target, "https://example.com/llms.txt");
     assert.equal(asked[0], "https://example.com/llms.txt");
+  } finally { globalThis.fetch = orig; }
+});
+
+test("a blockquote after other text warns with its line, and a missing one keeps its detail", () => {
+  const late = byId(validateLlmsTxt(good("# T\n\nAn intro paragraph.\n\n> One line.\n\n## Docs\n\n- [G](https://ex.com/g)\n")), "summary");
+  assert.equal(late.status, "warn");
+  assert.equal(late.detail, "the blockquote at line 5 comes after other text, and the format places the summary directly after the title");
+  for (const text of [
+    "# T\n\nJust text.\n\n## Docs\n\n- [G](https://ex.com/g)\n",
+    "# T\n\nIntro.\n\n## Docs\n\n> a quote inside a section\n\n- [G](https://ex.com/g)\n",
+    "# T\n\nIntro.\n\n```\n> not a quote\n```\n\n## Docs\n\n- [G](https://ex.com/g)\n",
+    "# T\n\nIntro.\n\n    > an indented code line\n\n## Docs\n\n- [G](https://ex.com/g)\n",
+  ]) {
+    const c = byId(validateLlmsTxt(good(text)), "summary");
+    assert.equal(c.status, "warn");
+    assert.equal(c.detail, "recommended by the format (> one-line summary), not required");
+  }
+  assert.equal(byId(validateLlmsTxt(good("# T\n\n> One line.\n\n## Docs\n\n- [G](https://ex.com/g)\n")), "summary").status, "pass");
+});
+
+test("enteredPath returns a typed path that is neither the root nor /llms.txt", () => {
+  assert.equal(enteredPath("example.com"), "");
+  assert.equal(enteredPath("https://example.com/"), "");
+  assert.equal(enteredPath("example.com/llms.txt"), "");
+  assert.equal(enteredPath("https://example.com/docs/llms.txt"), "/docs/llms.txt");
+  assert.equal(enteredPath("http://Example.com/Docs/LLMS.txt?token=abc#x"), "/Docs/LLMS.txt");
+  assert.equal(enteredPath("example.com/LLMS.txt"), "/LLMS.txt", "the read path is lower case, so another case is not the file read");
+  assert.equal(enteredPath("not a url"), "");
+});
+
+test("validateHost names a typed path it does not use and still reads /llms.txt", async () => {
+  const orig = globalThis.fetch;
+  const asked = [];
+  globalThis.fetch = async (u) => {
+    asked.push(String(u));
+    return new Response("# Example\n\n> One line.\n\n## Docs\n\n- [G](https://ex.com/g)\n", { status: 200, headers: { "content-type": "text/plain" } });
+  };
+  try {
+    const plain = await validateHost("ex.com");
+    const typed = await validateHost("https://ex.com/docs/llms.txt?key=secret");
+    assert.equal(asked[2], "https://ex.com/llms.txt", "the typed path is not fetched");
+    assert.equal(asked[3], "https://ex.com/");
+    assert.equal(byId(plain.checks, "input-path"), undefined);
+    assert.equal(typed.checks[0].id, "input-path");
+    assert.equal(typed.checks[0].status, "info");
+    assert.equal(typed.checks[0].detail, "/docs/llms.txt is not used, because the validator always reads /llms.txt at the root of the host");
+    assert.equal(typed.summary, plain.summary, "information moves no summary");
+    assert.equal(typed.checks.length, plain.checks.length + 1);
+    assert.ok(!JSON.stringify(typed).includes("secret"), "the query is never shown");
   } finally { globalThis.fetch = orig; }
 });

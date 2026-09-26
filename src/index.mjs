@@ -86,6 +86,21 @@ export function normalizeHostInput(raw) {
   return typedHost.length > 1 && typedHost.endsWith(".") ? typedHost.slice(0, -1) : typedHost;
 }
 
+// The path of the address as typed, when it is neither the root nor /llms.txt. validateHost keeps its
+// reads pinned to /llms.txt and the home page, because a fixed path is part of the guard against use
+// as a fetch proxy, so a typed /docs/llms.txt used to be dropped without a word while the result
+// described the root file (outside retest 2026-09-26). The result now names the unused path in an
+// info check. The case of the path is kept, and the query and fragment are never returned.
+// Mirrors worker.js enteredPath() (v3.176.0).
+export function enteredPath(raw) {
+  let s = String(raw || "").trim();
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) s = "https://" + s;
+  let u;
+  try { u = new URL(s); } catch { return ""; }
+  const path = u.pathname;
+  return path === "/" || path === "" || path === "/llms.txt" ? "" : path;
+}
+
 export function isValidPublicHost(host) {
   if (!host || host.length > 253) return false;
   if (host.startsWith("[") || /^\d+\.\d+\.\d+\.\d+$/.test(host)) return false;
@@ -316,7 +331,20 @@ export function validateLlmsTxt(f) {
   if (afterH1.trim().startsWith("> ")) {
     add("summary", "pass", "Blockquote summary after the title", JSON.stringify(cut(afterH1.trim(), 80)));
   } else {
-    add("summary", "warn", "Blockquote summary after the title", "recommended by the format (> one-line summary), not required");
+    // A blockquote further down, before the first H2, is a summary in the wrong place and not a
+    // missing one, and the detail says which (outside retest 2026-09-26, mirrored from worker.js
+    // v3.176.0). The status is warn either way, because the format places the summary directly
+    // after the title.
+    const fence = fenceMask(lines);
+    let late = -1;
+    for (let i = firstIdx + 1; i < lines.length; i++) {
+      if (fence[i]) continue;
+      if (/^ {0,3}## /.test(lines[i])) break;
+      if (/^ {0,3}> /.test(lines[i])) { late = i; break; }
+    }
+    add("summary", "warn", "Blockquote summary after the title", late === -1
+      ? "recommended by the format (> one-line summary), not required"
+      : "the blockquote at line " + (late + 1) + " comes after other text, and the format places the summary directly after the title");
   }
   // Headings are read outside fences only, and with the same indentation the H1 check and
   // listItemHasLink have allowed since 2026-08-29. Until 2026-09-10 this one line still
@@ -1270,6 +1298,10 @@ export async function validateHost(input, opts = {}) {
     discovery = validateV2Discovery(null, "the home page could not be read, so this was not measured");
   }
   const checks = validateLlmsTxt(fetched).concat(discovery);
+  // A path in the typed address is not used, and the result says so first (mirrored from worker.js
+  // v3.176.0). Information moves no summary and no exit code.
+  const unusedPath = enteredPath(input);
+  if (unusedPath) checks.unshift({ id: "input-path", status: "info", label: "Path in the address you entered", detail: cut(unusedPath, 120) + " is not used, because the validator always reads /llms.txt at the root of the host" });
   // Text quoted from the fetched file leaves without bidirectional controls (round 19,
   // V6-U1, mirrored from worker.js v3.164.0): a site's own H1 or summary could otherwise
   // read in another order here than in the file itself.

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // CLI for turva-llms-txt-validator. Exit codes: 0 = valid (or valid with
 // warnings), 1 = not valid (or warnings with --strict), 2 = could not fetch
-// or bad input. The two v2 discovery checks carry status "info" and move no
-// exit code, by design. Same checks and JSON shape as the hosted validator:
+// or bad input. The two v2 discovery checks and the input-path note carry status
+// "info" and move no exit code, by design. Same checks and JSON shape as the hosted validator:
 // curl -H "Accept: application/json" "https://turva.dev/llms-txt-validator?url=example.com"
 import { validateHost } from "../src/index.mjs";
 

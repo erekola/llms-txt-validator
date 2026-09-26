@@ -1,5 +1,25 @@
 # turva-llms-txt-validator changelog
 
+## 0.3.7 (2026-09-26)
+
+An outside retest of the hosted validator found two gaps. This release mirrors both fixes.
+
+A path in the supplied address was dropped without a word. `validateHost("https://www.mintlify.com/docs/llms.txt")`
+read `https://www.mintlify.com/llms.txt`, as the README says, but the result did not show that the
+typed file was not the one checked. Both reads stay pinned to `/llms.txt` and the home page, because a
+fixed path is part of the guard that keeps the validator from being used as a fetch proxy. Now the
+result opens with an `info` check, `input-path`, that names the unused path. Neither the query nor the
+fragment is shown, and an `info` check moves no summary and no exit code. A new export,
+`enteredPath`, returns the path.
+
+One detail in the `summary` warning covered two cases. A file with no blockquote and a file whose
+blockquote comes after an introductory paragraph both read "recommended by the format (> one-line
+summary), not required". The format places the summary directly after the title, so the status stays
+`warn` in both cases, and the second case now names the line where the blockquote starts. A blockquote
+after the first H2 or inside a fence is not read as a late summary.
+
+Both changes mirror the hosted validator in worker.js. 3 new tests, 71 total.
+
 ## 0.3.6 (2026-09-23)
 
 Turva's own internal audit round 19 of the hosted validator found two gaps this package still had,
