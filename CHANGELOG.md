@@ -1,5 +1,27 @@
 # turva-llms-txt-validator changelog
 
+## 0.3.8 (2026-09-27)
+
+An outside audit of this package and of the hosted validator found checks that read the format more loosely than CommonMark does, and output that could carry more than it should. This release mirrors the hosted validator in worker.js.
+
+The H1 check now reads the heading as CommonMark does. `#  Example` and a tab after the marker pass, and `# ###`, a heading whose text is only its closing sequence, fails.
+
+Inline code, an escaped bracket or an image no longer turns its text into a link. Links in an ordered list, after a tab, with a title or with a target in angle brackets now count.
+
+The sections check now warns about a heading between the title and the first H2, or a second H1, and names its line.
+
+Every link target has to parse as an HTTP or HTTPS URL with a host. `https://%` and `https://example.com:99999/` passed as absolute links before.
+
+The content type is compared as a whole media type. `application/x-text/plain` and `text/markdownish` passed before.
+
+`localhost.localdomain` is refused, because many hosts files point it at the loopback address.
+
+An input error no longer repeats an address that holds `@`, `?` or `#`. The discovery targets are masked like redirect targets, every check detail is cleared of control characters, and a head longer than 65,536 characters is reported as read in part.
+
+The CLI refuses an unknown option and a second domain with exit code 2. A missing domain returns JSON under `--json`, and `--help` exits with code 0.
+
+On 49 real llms.txt files no summary changed. The heading rule adds a warning to the sections check of four files that already carried another warning. 12 new tests, 83 total.
+
 ## 0.3.7 (2026-09-26)
 
 An outside retest of the hosted validator found two gaps. This release mirrors both fixes.

@@ -333,7 +333,7 @@ test("an entry with an empty link name is not a usable link", () => {
 test("a scheme without a host is not an absolute link", () => {
   const bad = validateLlmsTxt(good("# T\n\n> s\n\n## L\n\n- [a](https://)\n"));
   assert.equal(byId(bad, "links").status, "warn");
-  assert.match(byId(bad, "links").detail, /no host/);
+  assert.match(byId(bad, "links").detail, /not valid http or https URLs/);
   const okay = validateLlmsTxt(good("# T\n\n> s\n\n## L\n\n- [a](https://a.example/x)\n"));
   assert.equal(byId(okay, "links").status, "pass");
 });

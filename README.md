@@ -54,7 +54,7 @@ Use JSON for automation and strict mode when warnings should fail a CI step:
 npx --yes turva-llms-txt-validator example.com --json --strict
 ```
 
-Completed validation returns `{ target, summary, checks }`. Each check contains `{ id, status, label, detail }`. With `--json`, input and fetch errors return `{ "error": "..." }` and exit with code `2`.
+Completed validation returns `{ target, summary, checks }`. Each check contains `{ id, status, label, detail }`. With `--json`, input and fetch errors return `{ "error": "..." }` and exit with code `2`. An unknown option, a second domain and a missing domain are input errors too, and `--help` exits with code `0`.
 
 ## What it checks
 
@@ -63,13 +63,15 @@ Completed validation returns `{ target, summary, checks }`. Each check contains 
 | # | Check | Failure | Warning |
 | --- | --- | --- | --- |
 | 1 | `/llms.txt` returns HTTP 200 | Non-200 response, rejected or excessive redirects | none |
-| 2 | Response is plain text | Body looks like an HTML page | Content type is neither `text/plain` nor `text/markdown` |
-| 3 | First non-empty line is a Markdown H1 | Missing H1, including a title indented as a code block | none |
+| 2 | Response is plain text | Body looks like an HTML page | The media type, read without its parameters, is neither `text/plain` nor `text/markdown` |
+| 3 | First non-empty line is a Markdown H1 | Missing H1, a title indented as a code block, or an H1 with no text | none |
 | 4 | Blockquote summary follows the title | none | Missing summary, or a blockquote after other text but before the first H2, named by its line |
-| 5 | H2 sections group the content | none | No H2 sections, or no section contains a Markdown link list |
-| 6 | Markdown links have names and absolute HTTP or HTTPS targets | none | Missing links, empty names, relative targets or unsupported targets |
+| 5 | H2 sections group the content | none | No H2 sections, no section with a Markdown link list, a heading between the title and the first H2, or a second H1 |
+| 6 | Markdown links have names and absolute HTTP or HTTPS targets | none | Missing links, empty names, relative targets or targets that do not parse as HTTP or HTTPS URLs |
 | 7 | File is small enough to read cheaply | none | Over 50 KB, or truncated at the 256 KB read limit |
 | 8 | File contains no HTML markup | none | HTML tags found |
+
+Links are read the way CommonMark reads them. A link inside inline code, after an escaped bracket or in an image does not count, and a link in an ordered list, a target in angle brackets and a target with a title do.
 
 Some failures stop the file checks early. For example, an HTML response is reported as a failed plain-text check rather than parsed as Markdown.
 
@@ -82,7 +84,7 @@ These checks are labelled **v2** in the output. They look for link relations in 
 | 9 | Home page points to its llms.txt | `rel="describedby"` has a non-empty target | `info` |
 | 10 | Home page points to a Markdown version | `rel="alternate"` has media type `text/markdown` and a non-empty target | `info` |
 
-The validator detects these declarations without fetching their targets. It also does not follow the links inside `llms.txt`, crawl the site or test whether an AI agent can complete a task there.
+The validator detects these declarations without fetching their targets. It reads the first 65,536 characters of the head, and when a relation is missing from a longer head the result says that only that part was read. A target is shown with its credentials and fragment removed and its query values masked. It also does not follow the links inside `llms.txt`, crawl the site or test whether an AI agent can complete a task there.
 
 ## Use from Node
 
@@ -124,7 +126,7 @@ The default validation requests two documents: `https://<host>/llms.txt` and `ht
 - Timeout: eight seconds per document, shared across its redirect chain.
 - Read limit: 256 KB per response.
 - Redirects: up to four hops, over HTTPS, to the same host or its `www`/apex equivalent. Off-site redirects, embedded credentials and unsupported ports are rejected. A redirect target is reported with its credentials and fragment removed and its query values masked, whether the redirect was followed or rejected.
-- Host checks: IP literals, bracketed IPv6 addresses, localhost and the internal-use TLDs `local`, `internal`, `home`, `lan`, `corp`, `test`, `invalid`, `arpa` and `onion` are rejected before a request is sent. One trailing dot on the host you give, as in `example.com.`, is removed first. Redirect targets are checked too.
+- Host checks: IP literals, bracketed IPv6 addresses, localhost and the internal-use TLDs `localdomain`, `local`, `internal`, `home`, `lan`, `corp`, `test`, `invalid`, `arpa` and `onion` are rejected before a request is sent. An address that holds `@`, `?` or `#` is not repeated in the error message, because it can carry a user name, a password or a query value. One trailing dot on the host you give, as in `example.com.`, is removed first. Redirect targets are checked too.
 
 **DNS resolution is not checked for private addresses.** A syntactically public domain can resolve to a private IP, so if you expose this package through a service that accepts untrusted domains, enforce private-address restrictions at the network layer. Local and CI runs use their own network policy. The hosted validator runs on the Cloudflare edge.
 
