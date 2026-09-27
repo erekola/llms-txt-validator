@@ -12,9 +12,12 @@ latest published version is the supported one.
 ## Supply chain
 
 The package is published to npm from GitHub Actions with npm trusted
-publishing over OIDC. Every release carries a provenance attestation naming
-the repository, the workflow and the commit it was built from, verifiable on
-the npm package page. No npm token is stored in this repository.
+publishing over OIDC. Since version 0.1.3, every release carries a provenance
+attestation naming the repository, the workflow and the commit it was built
+from, verifiable on the npm package page. Versions 0.1.1 and 0.1.2 were
+published before trusted publishing was set up and carry no attestation;
+check the version page on npmjs.com before relying on provenance for a given
+version. No npm token is stored in this repository.
 
 There are no runtime dependencies. The module reads its own package.json for
 the version string and calls fetch, and nothing else.

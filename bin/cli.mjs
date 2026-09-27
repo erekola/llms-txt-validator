@@ -4,15 +4,18 @@
 // or bad input. The two v2 discovery checks and the input-path note carry status
 // "info" and move no exit code, by design. Same checks and JSON shape as the hosted validator:
 // curl -H "Accept: application/json" "https://turva.dev/llms-txt-validator?url=example.com"
-import { validateHost, stripControls } from "../src/index.mjs";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { validateHost, stripControls, maskLocation } from "../src/index.mjs";
 
 const USAGE = [
   "usage: llms-txt-validate <domain-or-url> [--json] [--strict]",
-  "  --json    print the result as JSON (same shape as the hosted validator)",
-  "  --strict  exit 1 on warnings too, for CI gates",
-  "  --help    print this help"
+  "  --json     print the result as JSON (same shape as the hosted validator)",
+  "  --strict   exit 1 on warnings too, for CI gates",
+  "  --help     print this help",
+  "  --version  print the installed version and exit"
 ];
-const KNOWN = new Set(["--json", "--strict", "--help", "-h"]);
+const KNOWN = new Set(["--json", "--strict", "--help", "-h", "--version", "-V"]);
 
 // The arguments are read strictly since 0.3.8 (Tek-496). An unknown flag such as a misspelled
 // --strcit used to be ignored, so a CI step ran without the gate it asked for, and a second
@@ -34,6 +37,15 @@ function fail(message) {
 
 if (flags.includes("--help") || flags.includes("-h")) {
   for (const line of USAGE) console.log(line);
+  process.exit(0);
+}
+if (flags.includes("--version") || flags.includes("-V")) {
+  // Read package.json relative to this file, not the caller's cwd, so this works the same
+  // whether the CLI runs installed, linked or through npx (V-04, outside audit 2026-09-26).
+  // No network read: the version is the one actually installed, not the npm registry's latest.
+  const pkgUrl = new URL("../package.json", import.meta.url);
+  const pkg = JSON.parse(readFileSync(fileURLToPath(pkgUrl), "utf8"));
+  console.log(pkg.version);
   process.exit(0);
 }
 const unknown = flags.find((f) => !KNOWN.has(f));
@@ -61,7 +73,19 @@ try {
   // The hosted validator answers every failure as JSON when JSON was asked for, so a CI
   // step that parses --json output gets {"error": ...} here too instead of an empty stdout
   // and a plain-text stderr (round 16 S3-3). The exit code is unchanged.
-  if (json) console.log(JSON.stringify({ error: message }, null, 2));
-  else console.error("error: " + message);
+  //
+  // target and code are added as separate fields (V-05, outside audit 2026-09-26): a bare
+  // {"error": message} left a CI step unable to tell which target failed or why without
+  // parsing free text. code reads a network error's cause first (undici wraps the real
+  // errno code, such as EAI_AGAIN or ECONNREFUSED, in err.cause.code) and falls back to
+  // err.code for an error that sets it directly; it is omitted, not null, when neither is set.
+  // target goes through maskLocation like every other address the tool prints, so a user name,
+  // a password or a query value typed into the command line is never echoed back.
+  const code = (err && err.cause && err.cause.code) || (err && err.code);
+  if (json) {
+    const report = { error: message, target: stripControls(maskLocation(targets[0])) };
+    if (code) report.code = stripControls(String(code));
+    console.log(JSON.stringify(report, null, 2));
+  } else console.error("error: " + message);
   process.exit(2);
 }

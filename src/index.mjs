@@ -454,7 +454,11 @@ export function validateLlmsTxt(f) {
     add("h1-title", "fail", "Starts with an H1 title", "the first non-empty line should be a markdown H1 (# Site name)");
   }
   const afterH1 = lines.slice(firstIdx + 1).find((l) => l.trim() !== "") || "";
-  if (afterH1.trim().startsWith("> ")) {
+  // Read the same way as the H1 check and the "late" blockquote search below: at most three
+  // leading spaces, per CommonMark. A trim-first prefix test used to erase the difference, so
+  // a four-space or tab-indented code block right after the title passed as the summary until
+  // 2026-09-27 (Tek-496, mirrored from worker.js).
+  if (/^ {0,3}> /.test(afterH1)) {
     add("summary", "pass", "Blockquote summary after the title", JSON.stringify(cut(afterH1.trim(), 80)));
   } else {
     // A blockquote further down, before the first H2, is a summary in the wrong place and not a
@@ -679,8 +683,11 @@ var C1_REPLACEMENTS = {
 
 // The full WHATWG list of named character references, 2 231 names: "name!hex" is a name that
 // also decodes without its ";", "name=hex" one that needs it, and several code points are
-// separated by ",". Generated 2026-09-12 from the character-entities package, with every value
-// and every legacy name checked against the decoder of the entities package.
+// separated by ",". Generated 2026-09-12 from character-entities 2.0.2
+// (https://github.com/wooorm/character-entities), (c) 2015 Titus Wormer, MIT, with every value
+// and every legacy name checked against the decoder of the entities package. The full license
+// text is in THIRD-PARTY-NOTICES.md (E01, outside audit 2026-09-26); this is a build-time data
+// source copied in at generation time, not an installed runtime dependency.
 var NAMED_REFERENCE_DATA =
   "AElig!c6 AMP!26 Aacute!c1 Abreve=102 Acirc!c2 Acy=410 Afr=1d504 Agrave!c0 Alpha=391 Amacr=100 " +
   "And=2a53 Aogon=104 Aopf=1d538 ApplyFunction=2061 Aring!c5 Ascr=1d49c Assign=2254 Atilde!c3 " +

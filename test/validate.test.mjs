@@ -743,6 +743,25 @@ test("a blockquote after other text warns with its line, and a missing one keeps
   assert.equal(byId(validateLlmsTxt(good("# T\n\n> One line.\n\n## Docs\n\n- [G](https://ex.com/g)\n")), "summary").status, "pass");
 });
 
+test("F08: a code block right after the title is not a blockquote summary, 0 to 3 spaces still is", () => {
+  // Outside audit 2026-09-26, F08. A trim-first prefix test used to erase the indentation that
+  // makes CommonMark read four spaces or a tab as an indented code block, not a blockquote, so
+  // the code block right after the title passed as the summary. The immediate-after-title case
+  // is tested here; the "late" search a few lines above already applied the same 0-3 rule.
+  for (const text of [
+    "# T\n\n    > this is an indented code block\n\n## Docs\n\n- [G](https://ex.com/g)\n",
+    "# T\n\n\tthis is a tab-indented code block\n\n## Docs\n\n- [G](https://ex.com/g)\n",
+  ]) {
+    const c = byId(validateLlmsTxt(good(text)), "summary");
+    assert.equal(c.status, "warn", text);
+    assert.equal(c.detail, "recommended by the format (> one-line summary), not required", text);
+  }
+  for (const spaces of ["", " ", "  ", "   "]) {
+    const text = "# T\n\n" + spaces + "> One line.\n\n## Docs\n\n- [G](https://ex.com/g)\n";
+    assert.equal(byId(validateLlmsTxt(good(text)), "summary").status, "pass", JSON.stringify(spaces));
+  }
+});
+
 test("enteredPath returns a typed path that is neither the root nor /llms.txt", () => {
   assert.equal(enteredPath("example.com"), "");
   assert.equal(enteredPath("https://example.com/"), "");

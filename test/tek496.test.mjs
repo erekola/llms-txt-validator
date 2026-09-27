@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { validateLlmsTxt, summarizeChecks, validateHost, findLinkRelations, isValidPublicHost } from "../src/index.mjs";
 
@@ -117,4 +118,47 @@ test("CLI: an unknown option, a second target and a missing target stop with exi
   const help = run("--help");
   assert.equal(help.status, 0);
   assert.match(help.stdout, /usage: llms-txt-validate/);
+});
+
+test("CLI: --version and -V print the installed version and exit 0 (V-04)", () => {
+  const pkg = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"));
+  const run = (...args) => spawnSync(process.execPath, [cli, ...args], { encoding: "utf8" });
+  for (const flag of ["--version", "-V"]) {
+    const result = run(flag);
+    assert.equal(result.status, 0, flag);
+    assert.equal(result.stdout.trim(), pkg.version, flag);
+    assert.equal(result.stderr, "", flag);
+  }
+  // A target is not required with --version, unlike the ordinary run, and no network call is
+  // made: validateHost would need a live fetch, and this exits before that path is reached.
+  assert.equal(run("--version", "--strict").status, 0);
+});
+
+test("CLI: a network error under --json carries target and code, error unchanged (V-05)", () => {
+  // A stubbed fetch stands in for a real DNS failure: it is deterministic and does not wait
+  // out the real 8 second fetch timeout the way an actual unreachable host would.
+  const mock = new URL("fixtures/mock-network-error.mjs", import.meta.url).href;
+  const result = spawnSync(process.execPath, ["--import", mock, cli, "example.com", "--json"], { encoding: "utf8" });
+  assert.equal(result.status, 2);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.error, "fetch failed");
+  assert.equal(parsed.target, "example.com");
+  assert.equal(parsed.code, "EAI_AGAIN");
+});
+
+test("CLI: an input error under --json still carries no code field (V-05)", () => {
+  const result = spawnSync(process.execPath, [cli, "not a host", "--json"], { encoding: "utf8" });
+  assert.equal(result.status, 2);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.error, "not a public domain name: not a host");
+  assert.equal(parsed.target, "not a host");
+  assert.equal("code" in parsed, false);
+});
+
+test("CLI: the target field under --json masks a user name, a password and a query (V-05)", () => {
+  const result = spawnSync(process.execPath, [cli, "https://user:supersecret@nonexistent.invalid.test/?token=abc", "--json"], { encoding: "utf8" });
+  assert.equal(result.status, 2);
+  const parsed = JSON.parse(result.stdout);
+  assert.doesNotMatch(result.stdout, /supersecret|user:|abc/);
+  assert.match(parsed.target, /nonexistent\.invalid\.test/);
 });

@@ -1,5 +1,35 @@
 # turva-llms-txt-validator changelog
 
+## 0.3.9 (2026-09-27)
+
+An outside audit of this package found one more format gap mirrored from the hosted validator,
+two missing CLI conveniences, an overbroad security claim and an incomplete third-party
+attribution. Its finding codes are F08, V-04, V-05, SC-09 and E01.
+
+The blockquote summary check now applies the same at-most-three-space rule as the H1 check and
+the sections check. A trim-first prefix test used to erase the difference, so a code block
+indented by four spaces or a tab, placed right after the title, passed as the summary.
+
+The CLI now takes `--version`/`-V`, printing the installed package's own version from its
+package.json and exiting 0, without a network read. `--help` still wins when both are given.
+
+A fetch or network error under `--json` now carries `target`, the address given on the command
+line with any user name, password and query value masked. When the underlying error names an
+errno-style code, such as EAI_AGAIN, the object also carries it as `code`, read from the error's
+cause first and from the error itself second. `error` is unchanged. An input validation error
+still carries no `code` field.
+
+SECURITY.md's provenance claim is scoped to versions 0.1.3 and later. Versions 0.1.1 and 0.1.2
+were published from a maintainer machine before npm trusted publishing was set up for this
+package, and they carry no attestation. Check the version page on npmjs.com for a given version.
+
+The generated character-entities reference table, `NAMED_REFERENCE_DATA`, now names its source
+package, its version and URL and its copyright holder in its own comment. The full MIT license
+text of character-entities 2.0.2, copyright 2015 Titus Wormer, is recorded in a new
+THIRD-PARTY-NOTICES.md, which ships in the tarball.
+
+5 new tests, 89 total.
+
 ## 0.3.8 (2026-09-27)
 
 An outside audit of this package and of the hosted validator found checks that read the format more loosely than CommonMark does, and output that could carry more than it should. This release mirrors the hosted validator in worker.js.
