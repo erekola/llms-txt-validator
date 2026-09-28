@@ -1,5 +1,52 @@
 # turva-llms-txt-validator changelog
 
+## 0.3.10 (2026-09-28)
+
+An outside re-check of this package against its 0.3.9 release found six more gaps, all mirrored
+from the hosted validator, and one place where the changelog claimed more than this repository
+publishes. Its finding codes are R1, R2, V1, V2, V3 and N03.
+
+`maskLocation` left the text after an opaque scheme, such as a bare "u:", untouched: the URL
+parser accepts it without a host, so clearing the (nonexistent) username and password was a
+silent no-op, and the CLI's JSON `target` field printed it back in full. Such a target now goes
+through the same string-based mask an unparseable one already used.
+
+A link whose text contains an image, `[Guide ![icon](x)](y)`, was not recognized as a link at
+all: any nested `[` ended the scan, image or not. An image nested in link text is now skipped
+whole, so the outer link is found; the image itself still does not count as a link of its own,
+and a link nested in a link, which CommonMark does not allow, still ends the scan as before.
+
+A link target was checked in its literal source spelling, so a character reference such as
+`&#58;` or `&#37;` hid a malformed destination (`https://host&#58;99999/`, an invalid port once
+decoded) from the URL check. A target is now decoded the same way an HTML attribute value is
+before it is checked.
+
+A markdown reference link, `[text][label]` or the collapsed `[text][]`, was not resolved at all:
+both checks read the pair as plain brackets, whether or not a `[label]: target` definition existed
+elsewhere in the document. It is now resolved the way CommonMark expects,
+against a definition written anywhere in the same document, before or after its use, in both the
+links check and the section-list check. Inline code that crosses a real line ending, such as a
+backtick-fenced link split over two lines, used to be masked only on its own line, so the second
+line's content escaped the mask; the code span scan now covers the whole document and a link
+inside such a span is correctly read as code, not as a link, in both checks.
+
+A document read through the direct `validateLlmsTxt` API failed its H1 check on a leading
+byte-order mark, while the same bytes read over HTTP already had it removed by the fetch path's
+own decoder. A leading BOM is now stripped the same way in both.
+
+The blockquote summary check required a literal space after `>`, so `>Summary` and a tab after
+`>` warned as a missing summary although both are valid CommonMark blockquotes. The check now
+accepts `>` followed by a space, a tab, or nothing; four or more leading spaces before `>` still
+read as indented code, not a blockquote, as before.
+
+The 0.3.4 entry below said a differential fuzz run found 0 of 390 000 generated documents
+reading differently from parse5. That count came from one run in this repository's own history;
+the generator, its seeds and the run's log were never published here, so the figure is not
+independently reproducible from what this repository carries, and the entry now says so.
+
+Node 18 and 20 are dropped from `engines.node` and from the CI matrix; the supported minimum is
+now Node 22, the same floor markdown-parity-check already carries.
+
 ## 0.3.9 (2026-09-27)
 
 An outside audit of this package found one more format gap mirrored from the hosted validator,
@@ -144,9 +191,13 @@ The search for the end of a comment was quadratic on a page that never uses the 
 which is almost every page. 100 KB of short comments took 770 ms, and the search is now one linear
 pass.
 
-After the fix, 0 of 390 000 generated documents read differently from parse5, and the generators
-were written by two authors, one of them the outside verifier. The two checks still report only
-pass or info, and the summary line and the `--strict` exit code are unchanged. Nothing else changed.
+After the fix, a differential run against parse5 across roughly 390 000 generated documents found
+no more disagreements in that round, and the generators were written by two people, one of them
+reviewing the fix separately. That run's generator, seeds and log were not published with this
+repository, so the count is a record of what was done, not a figure this repository lets anyone
+reproduce (2026-09-28: an outside re-check found the earlier wording overstated that; see 0.3.10).
+The two checks still report only pass or info, and the summary line and the `--strict` exit code
+are unchanged. Nothing else changed.
 
 ## 0.3.3 (2026-09-09)
 

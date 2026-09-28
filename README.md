@@ -8,7 +8,7 @@ Check a website's `llms.txt` from the command line, Node or CI. Get a clear resu
 
 ## Quick start
 
-Requires **Node.js 18.17 or newer**. Run it without a global install:
+Requires **Node.js 22 or newer**. Run it without a global install:
 
 ```sh
 npx --yes turva-llms-txt-validator example.com
@@ -110,7 +110,7 @@ for (const check of result.checks) {
 
 ## Use in CI
 
-Add this step to a GitHub Actions job that already has Node.js 18.17 or newer available. Replace `your-domain.com` with your domain:
+Add this step to a GitHub Actions job that already has Node.js 22 or newer available. Replace `your-domain.com` with your domain:
 
 ```yaml
 - name: Validate llms.txt

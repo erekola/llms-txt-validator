@@ -793,3 +793,116 @@ test("validateHost names a typed path it does not use and still reads /llms.txt"
     assert.ok(!JSON.stringify(typed).includes("secret"), "the query is never shown");
   } finally { globalThis.fetch = orig; }
 });
+
+// R1 (outside review 2026-09-28): an opaque scheme such as "u:" parses without throwing but has
+// no host, so maskLocation used to leave the credential-shaped text after it untouched.
+test("maskLocation masks an opaque-scheme target the same way an unparseable one is masked", () => {
+  const masked = maskLocation("u:AUDIT_SECRET@example.com/?token=TOPSECRET#FRAGMENTSECRET");
+  assert.ok(!masked.includes("AUDIT_SECRET"), masked);
+  assert.ok(!masked.includes("TOPSECRET"), masked);
+  assert.ok(!masked.includes("FRAGMENTSECRET"), masked);
+  assert.match(masked, /^u:\*\*\*@example\.com\/\?\*\*\*$/);
+});
+
+test("the CLI target field masks an opaque-scheme argument too", () => {
+  const res = spawnSync(process.execPath, ["bin/cli.mjs", "u:AUDIT_SECRET@example.com/?token=TOPSECRET", "--json"]);
+  const out = JSON.parse(res.stdout.toString());
+  assert.equal(res.status, 2);
+  assert.ok(!JSON.stringify(out).includes("AUDIT_SECRET"), JSON.stringify(out));
+  assert.equal(out.target, "u:***@example.com/?***");
+});
+
+// R2 (outside review 2026-09-28): a link whose text contains an image, "[a ![i](x)](y)", used to
+// be missed entirely because any nested "[" ended the scan, image or not. The image itself must
+// still not count as its own link.
+test("a link containing an image is recognized as a link, and the image is not a link of its own", () => {
+  const text = "# Example\n\n> Summary\n\n## Docs\n\n- [Guide ![icon](https://example.com/icon.png)](https://example.com/guide)\n";
+  const checks = validateLlmsTxt(good(text));
+  assert.equal(byId(checks, "links").status, "pass");
+  assert.equal(byId(checks, "links").detail, "1 link, all absolute URLs");
+  assert.equal(byId(checks, "sections").status, "pass");
+});
+
+test("a bare image with no enclosing link is still not counted as a link", () => {
+  const text = "# Example\n\n> Summary\n\n## Docs\n\n- ![icon](https://example.com/icon.png)\n";
+  const checks = validateLlmsTxt(good(text));
+  assert.equal(byId(checks, "links").detail, "no markdown links found");
+});
+
+// V1 (outside review 2026-09-28): a link target was checked in its literal source spelling, so a
+// character reference such as "&#58;" hid a malformed destination ("https://host&#58;99999/",
+// decoded destination "https://host:99999/", an invalid port) from the URL check.
+test("a link target is checked after its character references are decoded", () => {
+  const text = "# Example\n\n> Summary\n\n## Docs\n\n- [Guide](https://example.com&#58;99999/)\n";
+  const checks = validateLlmsTxt(good(text));
+  const links = byId(checks, "links");
+  assert.equal(links.status, "warn");
+  assert.match(links.detail, /not valid http or https URLs/);
+});
+
+test("a link target with an ampersand entity still resolves to the intended query", () => {
+  const text = "# Example\n\n> Summary\n\n## Docs\n\n- [Guide](https://example.com/x?a=1&amp;b=2)\n";
+  const checks = validateLlmsTxt(good(text));
+  assert.equal(byId(checks, "links").status, "pass");
+});
+
+// V2 (outside review 2026-09-28): reference links, and a code span that crosses a line ending.
+test("a full reference link resolves against a definition written anywhere in the document", () => {
+  const text = "# Example\n\n> Summary\n\n## Docs\n\n- [Guide][guide]\n\n[guide]: https://example.com/guide\n";
+  const checks = validateLlmsTxt(good(text));
+  assert.equal(byId(checks, "links").status, "pass");
+  assert.equal(byId(checks, "links").detail, "1 link, all absolute URLs");
+  assert.equal(byId(checks, "sections").status, "pass");
+  assert.match(byId(checks, "sections").detail, /1 carrying a file list/);
+});
+
+test("a collapsed reference link, \"[label][]\", uses the link text as the label", () => {
+  const text = "# Example\n\n> Summary\n\n## Docs\n\n- [Guide][]\n\n[guide]: https://example.com/guide\n";
+  const checks = validateLlmsTxt(good(text));
+  assert.equal(byId(checks, "links").status, "pass");
+});
+
+test("an unresolved reference link is read as plain brackets, not as a link", () => {
+  const text = "# Example\n\n> Summary\n\n## Docs\n\n- [Guide][missing]\n";
+  const checks = validateLlmsTxt(good(text));
+  assert.equal(byId(checks, "links").detail, "no markdown links found");
+});
+
+test("a code span that crosses a real line ending masks its whole content, in both the links and the sections check", () => {
+  const text = "# Example\n\n> Summary\n\n## Docs\n\n- `[Guide](https://example.com/guide)\n  continued`\n";
+  const checks = validateLlmsTxt(good(text));
+  assert.equal(byId(checks, "links").detail, "no markdown links found");
+  assert.equal(byId(checks, "sections").status, "warn");
+  assert.match(byId(checks, "sections").detail, /no file list/);
+});
+
+test("a code span pair separated by a blank line is not a code span, per CommonMark", () => {
+  const text = "# Example\n\n> Summary\n\n## Docs\n\n`one\n\ntwo` [Guide](https://example.com/guide)\n";
+  const checks = validateLlmsTxt(good(text));
+  assert.equal(byId(checks, "links").status, "pass");
+});
+
+// V3 (outside review 2026-09-28): a leading BOM failed the H1 check through the direct API, the
+// same bytes fetched over HTTP already had the BOM removed by TextDecoder before reaching here.
+test("a leading byte-order mark does not fail the H1 check, matching what the fetch path already saw", () => {
+  const text = "\uFEFF# Example\n\n> Summary\n\n## Docs\n\n- [Guide](https://example.com/guide)\n";
+  const checks = validateLlmsTxt(good(text));
+  assert.equal(byId(checks, "h1-title").status, "pass");
+  assert.equal(byId(checks, "h1-title").detail, JSON.stringify("# Example"));
+});
+
+// N03 (outside review 2026-09-28): CommonMark allows a blockquote marker to carry a tab or no
+// space at all after ">"; only 4+ leading spaces before ">" stays indented code, not a quote.
+test("the blockquote summary accepts a tab or no space after \">\", per CommonMark", () => {
+  const noSpace = "# Example\n\n>Summary\n\n## Docs\n\n- [Guide](https://example.com/guide)\n";
+  const tab = "# Example\n\n>\tSummary\n\n## Docs\n\n- [Guide](https://example.com/guide)\n";
+  assert.equal(byId(validateLlmsTxt(good(noSpace)), "summary").status, "pass");
+  assert.equal(byId(validateLlmsTxt(good(tab)), "summary").status, "pass");
+});
+
+test("a blockquote indented as code (4+ spaces) still does not count as the summary", () => {
+  const text = "# Example\n\n    > Summary\n\n## Docs\n\n- [Guide](https://example.com/guide)\n";
+  const checks = validateLlmsTxt(good(text));
+  assert.equal(byId(checks, "summary").status, "warn");
+  assert.equal(byId(checks, "summary").detail, "recommended by the format (> one-line summary), not required");
+});

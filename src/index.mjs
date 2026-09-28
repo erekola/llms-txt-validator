@@ -39,7 +39,13 @@ export function cut(s, n) {
 export function maskLocation(href, base) {
   let u = null;
   try { u = new URL(href, base); } catch { u = null; }
-  if (u) {
+  // An opaque URL (no authority, e.g. "u:name@host/") parses without throwing but has no
+  // host, so clearing u.username/u.password is a silent no-op: WHATWG has nowhere to put
+  // them and the credential-shaped text stays in the opaque path untouched. Route it through
+  // the string branch below instead, the same one an unparseable target already uses
+  // (outside review 2026-09-28: a bare "u:" scheme let the text after it through as the
+  // CLI JSON "target" field, unmasked).
+  if (u && u.host) {
     u.username = "";
     u.password = "";
     for (const key of Array.from(u.searchParams.keys())) u.searchParams.set(key, "***");
@@ -202,20 +208,25 @@ function isEscaped(s, i) {
   return n % 2 === 1;
 }
 
-// Inline code spans of one line, marked per character, so a link written inside backticks is
-// read as the code it is (outside audit 2026-09-26, Tek-496). A span opens with a run of
-// backticks and closes with the next run of the same length on the same line. An escaped first
-// backtick is literal and the rest of its run still opens, while a closing run is never escaped,
-// because a backslash inside a code span is literal. Runs are grouped by length and every group
-// is read with one forward pointer, so the scan stays linear on a line of unmatched runs.
-function codeSpanMask(line) {
-  const mask = new Uint8Array(line.length);
+// Inline code spans, marked per character across the whole document, so a link written inside
+// backticks is read as the code it is (outside audit 2026-09-26, Tek-496), including when the
+// span itself crosses a real line ending: a fenceless "`[a](b)\ncontinued`" used to be masked
+// only on its own line, so the second line escaped the mask and its bracket read as a real link
+// (outside review 2026-09-28). A span opens with a run of backticks and closes with the next run
+// of the same length anywhere in the text; a pair whose interior holds a blank line (two line
+// endings in a row) is not a code span in CommonMark, so it is left unmasked and its backticks
+// stay literal. An escaped first backtick is literal and the rest of its run still opens, while a
+// closing run is never escaped, because a backslash inside a code span is literal. Runs are
+// grouped by length and every group is read with one forward pointer, so the scan stays linear on
+// a document of unmatched runs.
+function codeSpanMask(text) {
+  const mask = new Uint8Array(text.length);
   const runs = [];
-  for (let i = 0; i < line.length; ) {
-    if (line[i] !== "`") { i++; continue; }
+  for (let i = 0; i < text.length; ) {
+    if (text[i] !== "`") { i++; continue; }
     let j = i;
-    while (j < line.length && line[j] === "`") j++;
-    runs.push({ at: i, len: j - i, escaped: isEscaped(line, i) });
+    while (j < text.length && text[j] === "`") j++;
+    runs.push({ at: i, len: j - i, escaped: isEscaped(text, i) });
     i = j;
   }
   const byLen = new Map();
@@ -231,29 +242,61 @@ function codeSpanMask(line) {
     ptr.set(len, p);
     if (p === list.length) continue;
     const close = runs[list[p]];
-    mask.fill(1, r.escaped ? r.at + 1 : r.at, close.at + close.len);
+    const start = r.escaped ? r.at + 1 : r.at;
+    const end = close.at + close.len;
+    if (text.slice(start, end).indexOf("\n\n") === -1) mask.fill(1, start, end);
     k = list[p];
   }
   return mask;
+}
+
+// A CommonMark link reference label is matched without regard to case or the exact run of
+// whitespace inside it, so "[Guide]" and "[ guide ]" name the same definition.
+function normalizeLinkLabel(s) {
+  return s.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+// Link reference definitions, "[label]: target", read once per document so a reference link
+// such as "[text][label]" can resolve against one written anywhere else in the same file,
+// before or after its use, the way CommonMark allows (outside review 2026-09-28). A title
+// after the target is not read, because nothing here compares it, and only the first
+// definition of a given label counts, per spec. A destination wrapped in angle brackets has
+// them stripped.
+function collectLinkDefinitions(text) {
+  const defs = new Map();
+  for (const line of text.split("\n")) {
+    const m = /^ {0,3}\[([^\]]+)\]:[ \t]*(<[^<>\n]*>|\S+)/.exec(line);
+    if (!m) continue;
+    const label = normalizeLinkLabel(m[1]);
+    if (!label || defs.has(label)) continue;
+    let dest = m[2];
+    if (dest[0] === "<" && dest[dest.length - 1] === ">") dest = dest.slice(1, -1);
+    defs.set(label, dest);
+  }
+  return defs;
 }
 
 // Every markdown link in the prose, scanned once from left to right. A "[" inside a code span,
 // an escaped "\[" and the "![" of an image open no link, because none of them is a hyperlink
 // (all three counted until the outside audit of 2026-09-26, Tek-496). A target may be written in angle
 // brackets and may carry a title in quotes, as CommonMark allows; both were missed or misread
-// before. The scan carries no bound and no backtracking: the furthest failed plain target is
-// remembered as before, and the closing ">", quote and line end are looked up through a cache
-// that only moves forward, so a file that repeats "[a](" or "[a](x \"" stays linear.
-function collectLinks(text) {
+// before. An image nested in the link text, such as "[a ![i](x)](y)", is link content and is
+// skipped whole rather than ending the scan, so the outer hyperlink is still found; any other
+// nested "[" still ends the scan the way it always has, because CommonMark does not allow a
+// link inside a link (outside review 2026-09-28: the previous scan gave up on the whole outer
+// link the moment any nested "[" appeared, image or not). A full or collapsed reference link,
+// "[text][label]" or "[text][]", resolves against collectLinkDefinitions; an unresolved label
+// is read as plain brackets, the way it always was. A resolved target is decoded for character
+// references ("&#58;", "&amp;", ...) the same way an HTML attribute value is, so a destination
+// written as "https://host&#58;99999/" is checked as what it resolves to and not as its literal
+// source spelling (outside review 2026-09-28). The scan carries no bound and no backtracking:
+// the furthest failed plain target is remembered as before, and the closing ">", quote and line
+// end are looked up through a cache that only moves forward, so a file that repeats "[a](" or
+// "[a](x \"" stays linear.
+function collectLinks(text, defs) {
   const out = [];
-  const code = new Uint8Array(text.length);
-  {
-    let at = 0;
-    for (const line of text.split("\n")) {
-      code.set(codeSpanMask(line), at);
-      at += line.length + 1;
-    }
-  }
+  const code = codeSpanMask(text);
+  if (!defs) defs = collectLinkDefinitions(text);
   const cache = Object.create(null);
   const nextIdx = (c, from) => {
     const h = cache[c];
@@ -304,17 +347,53 @@ function collectLinks(text) {
     if (!found) failEnd = e;
     return found;
   };
+  // An image nested in the link text is skipped whole: k is the index of its own "[", right
+  // after an unescaped "!". Its alt text is not itself scanned for nested links or images, the
+  // first unescaped "]" closes it, and it is only skipped when a target follows; a malformed
+  // image (no closing "]", no "(target)") is left for the caller to treat as an ordinary
+  // nested bracket, the way one always was.
+  const skipImage = (k) => {
+    let m = k + 1;
+    while (m < text.length && text[m] !== "]" && text[m] !== "[") m += text[m] === "\\" ? 2 : 1;
+    if (m >= text.length || text[m] !== "]" || text[m + 1] !== "(") return null;
+    const t = readTarget(m + 2);
+    return t ? t.end + 1 : null;
+  };
   for (let i = 0; i < text.length; i++) {
     if (text[i] !== "[" || code[i] || isEscaped(text, i)) continue;
     if (i > 0 && text[i - 1] === "!" && !isEscaped(text, i - 1)) continue;
     let j = i + 1;
-    while (j < text.length && text[j] !== "]" && text[j] !== "[") j += text[j] === "\\" ? 2 : 1;
+    for (;;) {
+      while (j < text.length && text[j] !== "]" && text[j] !== "[") j += text[j] === "\\" ? 2 : 1;
+      if (j >= text.length || text[j] !== "[") break;
+      if (code[j] || text[j - 1] !== "!" || isEscaped(text, j - 1)) break;
+      const after = skipImage(j);
+      if (after === null) break;
+      j = after;
+    }
     if (j >= text.length) break;
     if (text[j] === "[") { i = j - 1; continue; }
-    if (text[j + 1] !== "(") { i = j; continue; }
-    const t = readTarget(j + 2);
-    if (t) { out.push({ name: text.slice(i + 1, j), target: t.target }); i = t.end; continue; }
-    i = j + 1;
+    if (text[j + 1] === "(") {
+      const t = readTarget(j + 2);
+      if (t) { out.push({ name: text.slice(i + 1, j), target: decodeAttributeValue(t.target), at: i }); i = t.end; continue; }
+      i = j + 1;
+      continue;
+    }
+    if (text[j + 1] === "[") {
+      let m = j + 2;
+      while (m < text.length && text[m] !== "]" && text[m] !== "\n") m += text[m] === "\\" ? 2 : 1;
+      if (m < text.length && text[m] === "]") {
+        const rawLabel = text.slice(j + 2, m);
+        const label = normalizeLinkLabel(rawLabel === "" ? text.slice(i + 1, j) : rawLabel);
+        const dest = label && defs.get(label);
+        if (dest !== undefined) {
+          out.push({ name: text.slice(i + 1, j), target: decodeAttributeValue(dest), at: i });
+          i = m;
+          continue;
+        }
+      }
+    }
+    i = j;
   }
   return out;
 }
@@ -356,16 +435,12 @@ function fenceMask(lines) {
 }
 // A markdown list item that carries a link. A bullet or an ordered marker (1. or 1)) followed by
 // a space or a tab opens the item; an ordered list and a tab after the marker were not read as
-// list items until 2026-09-27 (Tek-496). The link is found by collectLinks, so code, escapes
-// and images count here exactly as they do in the links check. A bare CR, U+2028 and U+2029 stay
-// inside a line after split(/\r?\n/), and a link behind one has never counted, so the item is read
-// up to the first of them.
-function listItemHasLink(l) {
-  const m = /^ {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]/.exec(l);
-  if (!m) return false;
-  const sep = l.slice(m[0].length).search(/[\r\u2028\u2029]/);
-  const body = sep === -1 ? l.slice(m[0].length) : l.slice(m[0].length, m[0].length + sep);
-  return collectLinks(body).length > 0;
+// list items until 2026-09-27 (Tek-496). Whether the line carries a link is decided by the
+// caller against the whole document's own collectLinks result (hasLink), not by re-scanning
+// this one line in isolation: a code span or a reference link target can resolve only across
+// more than one line, and a per-line rescan cannot see that (outside review 2026-09-28, V2).
+function listItemHasLink(l, hasLink) {
+  return !!hasLink && /^ {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]/.test(l);
 }
 
 // The text of an ATX H1, or null when the line is not one. One to three leading spaces, a
@@ -423,8 +498,14 @@ export function validateLlmsTxt(f) {
   // v3.164.0): a query value or a fragment in a same-host Location used to reach this
   // detail as sent.
   add("http-status", "pass", "File exists at /llms.txt", f.redirectedFrom ? "HTTP 200, followed a redirect from " + maskLocation(f.redirectedFrom) + " to " + maskLocation(f.finalUrl) : "HTTP 200");
+  // A leading byte-order mark is stripped the same way the fetch path already strips it: the
+  // TextDecoder used there removes a BOM by default, so the direct API took a different
+  // document than the fetched one for the exact same bytes until this was measured (outside
+  // review 2026-09-28); the h1-title check saw the mark as part of the first line and failed a
+  // document that would pass when fetched.
+  const text = f.text.charCodeAt(0) === 0xFEFF ? f.text.slice(1) : f.text;
   const ct = (f.contentType || "").toLowerCase();
-  const looksHtml = /^\s*(<!doctype|<html|<head|<body)/i.test(f.text);
+  const looksHtml = /^\s*(<!doctype|<html|<head|<body)/i.test(text);
   if (looksHtml) {
     add("content-type", "fail", "Response is plain text", "the body looks like an HTML page, not an llms.txt file");
     return checks;
@@ -437,7 +518,7 @@ export function validateLlmsTxt(f) {
   } else {
     add("content-type", "warn", "Response is plain text", "content-type is " + (ct.split(";")[0] || "missing") + ", text/plain or text/markdown is the convention");
   }
-  const lines = f.text.split(/\r?\n/);
+  const lines = text.split(/\r?\n/);
   const firstIdx = lines.findIndex((l) => l.trim() !== "");
   const firstRaw = firstIdx === -1 ? "" : lines[firstIdx];
   const first = firstRaw.trim();
@@ -458,7 +539,12 @@ export function validateLlmsTxt(f) {
   // leading spaces, per CommonMark. A trim-first prefix test used to erase the difference, so
   // a four-space or tab-indented code block right after the title passed as the summary until
   // 2026-09-27 (Tek-496, mirrored from worker.js).
-  if (/^ {0,3}> /.test(afterH1)) {
+  // A blockquote marker is 0-3 leading spaces plus ">", optionally followed by one space that
+  // is then part of the marker and not the content; CommonMark reads ">Summary" and a tab the
+  // same way, and four or more leading spaces stay indented code, not a blockquote (outside
+  // review 2026-09-28: a literal space was required, so a tab or no space at all warned as
+  // missing).
+  if (/^ {0,3}>/.test(afterH1)) {
     add("summary", "pass", "Blockquote summary after the title", JSON.stringify(cut(afterH1.trim(), 80)));
   } else {
     // A blockquote further down, before the first H2, is a summary in the wrong place and not a
@@ -470,7 +556,7 @@ export function validateLlmsTxt(f) {
     for (let i = firstIdx + 1; i < lines.length; i++) {
       if (fence[i]) continue;
       if (/^ {0,3}## /.test(lines[i])) break;
-      if (/^ {0,3}> /.test(lines[i])) { late = i; break; }
+      if (/^ {0,3}>/.test(lines[i])) { late = i; break; }
     }
     add("summary", "warn", "Blockquote summary after the title", late === -1
       ? "recommended by the format (> one-line summary), not required"
@@ -481,6 +567,29 @@ export function validateLlmsTxt(f) {
   // demanded column zero, so a correct file indented by one to three spaces was reported as
   // having no sections at all while its list under the same indentation counted fine.
   const fenced = fenceMask(lines);
+  // Computed once for both the section-list scan below and the links check further down, so a
+  // reference link definition written anywhere in the prose resolves the same way for each
+  // (outside review 2026-09-28, V2): "[text][label]" used to be recognized in the whole-document
+  // links check but not in the per-line section scan, which only ever saw one list item line.
+  const proseText = lines.filter((l, i) => !fenced[i]).join("\n");
+  const linkDefs = collectLinkDefinitions(proseText);
+  const proseLinks = collectLinks(proseText, linkDefs);
+  // Which original line each recognized link starts on, so the section scan below can ask "does
+  // this line carry a link" against the same whole-document result the links check itself uses,
+  // instead of re-finding links one isolated line at a time (outside review 2026-09-28, V2).
+  const linkedLineIdx = new Set();
+  {
+    const owners = [];
+    for (let i = 0; i < lines.length; i++) if (!fenced[i]) owners.push(i);
+    const starts = [];
+    let offset = 0;
+    for (const pl of proseText.split("\n")) { starts.push(offset); offset += pl.length + 1; }
+    for (const link of proseLinks) {
+      let idx = 0;
+      for (let k = 0; k < starts.length; k++) { if (starts[k] <= link.at) idx = k; else break; }
+      linkedLineIdx.add(owners[idx]);
+    }
+  }
   const h2Count = lines.filter((l, i) => !fenced[i] && /^ {0,3}## /.test(l)).length;
   // A section counts when it carries a file list. An H2 followed by a paragraph satisfied
   // this check until 2026-08-29, and the format puts each section's links in a list.
@@ -497,7 +606,7 @@ export function validateLlmsTxt(f) {
       const h1 = /^ {0,3}#(?:[ \t]|$)/.test(l);
       if (misplaced === -1 && i > firstIdx && (h1 || (!seenH2 && /^ {0,3}#{3,6}(?:[ \t]|$)/.test(l)))) misplaced = i;
       if (h1) { inSection = false; continue; }
-      if (inSection && !counted && listItemHasLink(l)) { sectionsWithList++; counted = true; }
+      if (inSection && !counted && listItemHasLink(l, linkedLineIdx.has(i))) { sectionsWithList++; counted = true; }
     }
   }
   if (h2Count > 0 && sectionsWithList > 0) {
@@ -513,8 +622,9 @@ export function validateLlmsTxt(f) {
     s.detail += "; the heading at line " + (misplaced + 1) + " is out of place, because the format has one H1 and no other heading before the first H2";
   }
   // Links are collected from the prose only, for the same reason the headings are: a link
-  // shown inside a code fence is an example of a link, not one an agent can follow.
-  const links = collectLinks(lines.filter((l, i) => !fenced[i]).join("\n"));
+  // shown inside a code fence is an example of a link, not one an agent can follow. Computed
+  // once above as proseLinks, reused here under its usual name.
+  const links = proseLinks;
   // An entry an agent can use has a name and a target with a host. An empty name and a
   // bare "https://" both counted as valid absolute links until 2026-08-29.
   const named = links.filter((m) => m.name.trim() !== "");
@@ -538,7 +648,7 @@ export function validateLlmsTxt(f) {
   } else {
     add("size", "warn", "Small enough to be cheap to read", f.bytes + " bytes; consider moving detail to llms-full.txt");
   }
-  if (/<[a-z][a-z0-9-]*[\s>]/i.test(f.text)) {
+  if (/<[a-z][a-z0-9-]*[\s>]/i.test(text)) {
     add("no-html", "warn", "No HTML markup in the file", "HTML tags found; llms.txt should be plain markdown");
   } else {
     add("no-html", "pass", "No HTML markup in the file", "plain markdown");

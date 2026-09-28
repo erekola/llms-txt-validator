@@ -9,13 +9,14 @@ jobs:
     # was a path bug the CLI test now guards (fileURLToPath, not URL.pathname), and a
     # Linux-only matrix cannot see it come back. Node 24 is here because the publish
     # workflow runs on 24 and a version tag was the first place that combination was
-    # ever tested. The supported minimum and the existing rows are unchanged.
+    # ever tested. Node 18 and 20 were dropped from the minimum and the matrix
+    # (2026-09-28, outside review): the supported minimum moved to Node 22.
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        node: [18, 20, 22, 24]
+        node: [22, 24]
         include:
           - os: windows-latest
             node: 22
