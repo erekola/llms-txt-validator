@@ -1,5 +1,12 @@
 # turva-llms-txt-validator changelog
 
+## 0.3.12 (2026-09-29)
+
+A README-only release. The README said links are read the way CommonMark reads them, while 0.3.11's own
+notes state that link reference definitions and labels spanning several lines and an image used as a
+reference are not handled. The README now limits the statement to the forms it lists and names the two
+that are not handled. No code or test changed.
+
 ## 0.3.11 (2026-09-29)
 
 A third outside re-check, run against 0.3.10, found a secret leak in the CLI, three regressions

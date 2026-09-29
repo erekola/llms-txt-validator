@@ -71,7 +71,7 @@ Completed validation returns `{ target, summary, checks }`. Each check contains 
 | 7 | File is small enough to read cheaply | none | Over 50 KB, or truncated at the 256 KB read limit |
 | 8 | File contains no HTML markup | none | HTML tags found |
 
-Links are read the way CommonMark reads them. A link inside inline code, after an escaped bracket or in an image does not count, and a link in an ordered list, a target in angle brackets and a target with a title do.
+Links are read the way CommonMark reads them for the forms listed here. A link inside inline code, after an escaped bracket or in an image does not count, and a link in an ordered list, a target in angle brackets and a target with a title do. A link reference definition or label that spans several lines, and an image used as a reference, are not handled.
 
 Some failures stop the file checks early. For example, an HTML response is reported as a failed plain-text check rather than parsed as Markdown.
 
