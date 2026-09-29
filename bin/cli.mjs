@@ -2,7 +2,8 @@
 // CLI for turva-llms-txt-validator. Exit codes: 0 = valid (or valid with
 // warnings), 1 = not valid (or warnings with --strict), 2 = could not fetch
 // or bad input. The two v2 discovery checks and the input-path note carry status
-// "info" and move no exit code, by design. Same checks and JSON shape as the hosted validator:
+// "info" and move no exit code, by design. Same checks as the hosted validator, and the same
+// JSON shape for a completed validation:
 // curl -H "Accept: application/json" "https://turva.dev/llms-txt-validator?url=example.com"
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -10,7 +11,7 @@ import { validateHost, stripControls, maskLocation } from "../src/index.mjs";
 
 const USAGE = [
   "usage: llms-txt-validate <domain-or-url> [--json] [--strict]",
-  "  --json     print the result as JSON (same shape as the hosted validator)",
+  "  --json     print the result as JSON (same shape as the hosted validator for a completed validation)",
   "  --strict   exit 1 on warnings too, for CI gates",
   "  --help     print this help",
   "  --version  print the installed version and exit"

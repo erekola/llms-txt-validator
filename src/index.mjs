@@ -63,11 +63,20 @@ export function maskLocation(href, base) {
   // path ("path@2x.png" stays unmasked below). But when an @ still appears before the first
   // /, the text ahead of it reads as userinfo even when the parser here does not recognise it
   // as a scheme (an underscore, a leading digit or space, a stray control character), so that
-  // shape is masked too instead of let through (VN1, round 3 Tek-542).
+  // shape is masked too instead of let through (VN1, round 3 Tek-542). With no slash at all
+  // the same holds when a ":" comes before the last @: "user_name:secret@example.com" is
+  // user:password and is masked, while "path@2x.png" has no ":" ahead of its @ and stays as
+  // given (outside review V13, D5-1: the slashless shape used to return early and print the
+  // password).
   if (!scheme && from - start < 2) {
     const firstSlash = s.indexOf("/");
     const firstAt = s.indexOf("@");
-    if (firstAt < 0 || firstSlash < 0 || firstAt > firstSlash) return s;
+    if (firstAt < 0) return s;
+    if (firstSlash < 0) {
+      if (!s.slice(0, s.lastIndexOf("@")).includes(":")) return s;
+    } else if (firstAt > firstSlash) {
+      return s;
+    }
   }
   // Nothing tells which @ of a refused target ends the user information, so everything up to the
   // last one is shown as ***. The mask is visible on purpose: three review rounds on 2026-09-22

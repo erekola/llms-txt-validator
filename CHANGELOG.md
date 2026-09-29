@@ -1,5 +1,18 @@
 # turva-llms-txt-validator changelog
 
+## 0.3.14 (2026-09-29)
+
+A fifth outside read found that the CLI printed the password of a target with no scheme and no slash.
+`llms-txt-validate "user_name:secret@example.com" --json` exited 2 and returned the target unmasked,
+because the masking returned early when the value held no slash. Now a colon ahead of the last `@` in such a
+value is read as user information and masked, so the target is `***@example.com`. Such a value is still
+shown as given when its `@` has no colon ahead of it, as in `path@2x.png`. The README now states this rule
+and the parser's limits: an escaped quote or a line break in a link title, nested brackets in a link
+label and `##` followed by a tab are not recognised, and a link in a four-space indented block is counted
+as a link but not as a file list. The `--json` usage text and the README now say the hosted JSON shape is
+the same for a completed validation only, and that the hosted site's rate limiter can answer HTTP 429 as
+plain text before the validator runs. Parser behaviour is unchanged. Tests: two new cases.
+
 ## 0.3.13 (2026-09-29)
 
 A README-only release, after a fourth outside read. The README said input errors with `--json` return

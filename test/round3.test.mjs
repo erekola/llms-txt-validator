@@ -51,6 +51,29 @@ test("VN1: an @ with no / anywhere in the string is still read as a path, not us
   assert.equal(maskLocation("path@2x.png"), "path@2x.png");
 });
 
+// V13 D5-1: with no slash at all, a ":" ahead of the last @ is user:password and is masked; an @
+// with no ":" ahead of it (an asset name) stays as given.
+test("V13 D5-1: a slashless user:password@host is masked, path@2x.png is not", () => {
+  assert.equal(maskLocation("user_name:demo-secret@example.com"), "***@example.com");
+  assert.equal(maskLocation("a_b:pw@example.com"), "***@example.com");
+  assert.equal(maskLocation("1user:pw@example.com"), "***@example.com");
+  assert.equal(maskLocation("user_name:pw@host?x=1"), "***@host?***");
+  assert.equal(maskLocation("path@2x.png"), "path@2x.png");
+  assert.equal(maskLocation("path/x@y"), "path/x@y");
+});
+
+test("V13 D5-1: the CLI --json target never carries the password of a slashless user:password@host", () => {
+  for (const input of ["user_name:demo-secret@example.com", "a_b:pw@example.com", "1user:pw@example.com", "user_name:pw@host?x=1"]) {
+    const res = spawnSync(process.execPath, ["bin/cli.mjs", input, "--json"]);
+    assert.equal(res.status, 2, input);
+    const out = JSON.parse(res.stdout.toString());
+    assert.ok(typeof out.target === "string" && out.target.startsWith("***@"), input + " -> " + out.target);
+    assert.doesNotMatch(res.stdout.toString(), /demo-secret|pw/, input);
+  }
+  const plain = JSON.parse(spawnSync(process.execPath, ["bin/cli.mjs", "path@2x.png", "--json"]).stdout.toString());
+  assert.equal(plain.target, "path@2x.png");
+});
+
 // --- V03-VREG1: a link reference definition is CommonMark-valid only in its own block, not
 // inside a code span or as a paragraph continuation line, with a title that is quoted or
 // absent; fence removal must not join lines across a fenced block. Codex's four exact cases.
