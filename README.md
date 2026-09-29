@@ -54,7 +54,7 @@ Use JSON for automation and strict mode when warnings should fail a CI step:
 npx --yes turva-llms-txt-validator example.com --json --strict
 ```
 
-Completed validation returns `{ target, summary, checks }`. Each check contains `{ id, status, label, detail }`. The `input-path` check, which reports a path given with the domain and then ignored, also carries `value`, that path cut to 120 characters. With `--json`, input and fetch errors return `{ "error": "...", "target": "..." }` and exit with code `2`. The target is the address given on the command line, with any user name, password and query value masked, and a network error adds `code`, such as `EAI_AGAIN`. An unknown option, a second domain and a missing domain are input errors too. `--help` exits with code `0`, and `--version` or `-V` prints the installed version and exits with code `0`.
+Completed validation returns `{ target, summary, checks }`. Each check contains `{ id, status, label, detail }`. The `input-path` check, which reports a path given with the domain and then ignored, also carries `value`, that path cut to 120 characters. With `--json`, an invalid domain or a failed fetch returns `{ "error": "...", "target": "..." }` and exits with code `2`. The target is the address given on the command line, with any user name, password and query value masked, and a network error adds `code`, such as `EAI_AGAIN`. An unknown option, a second domain and a missing domain return `{ "error": "..." }` only, with no target, and also exit with code `2`. `--help` exits with code `0`, and `--version` or `-V` prints the installed version and exits with code `0`.
 
 ## What it checks
 
@@ -71,7 +71,7 @@ Completed validation returns `{ target, summary, checks }`. Each check contains 
 | 7 | File is small enough to read cheaply | none | Over 50 KB, or truncated at the 256 KB read limit |
 | 8 | File contains no HTML markup | none | HTML tags found |
 
-Links are read the way CommonMark reads them for the forms listed here. A link inside inline code, after an escaped bracket or in an image does not count, and a link in an ordered list, a target in angle brackets and a target with a title do. A link reference definition or label that spans several lines, and an image used as a reference, are not handled.
+Links are read the way CommonMark reads them for the forms listed here. A link inside inline code, after an escaped bracket or in an image does not count, and a link in an ordered list, a target in angle brackets and a target with a title in double or single quotes do. A title in parentheses is not read, so `[Guide](https://example.org/guide (Overview))` is not collected. An unbracketed target ends at its first closing parenthesis, so `https://example.org/docs_(v2)` is read only up to `https://example.org/docs_(v2`; write a target that contains parentheses in angle brackets. A link reference definition or label that spans several lines, and an image used as a reference, are not handled.
 
 Some failures stop the file checks early. For example, an HTML response is reported as a failed plain-text check rather than parsed as Markdown.
 
@@ -136,7 +136,9 @@ For vulnerability reporting and supported versions, see [SECURITY.md](SECURITY.m
 
 The [hosted validator](https://turva.dev/llms-txt-validator) accepts any public domain in the browser. It requests the same two documents, `/llms.txt` and the home page, and runs the same checks. Its source is in the [turva.dev Cloudflare Worker](https://github.com/erekola/turva-worker). The hosted validator is the canonical implementation: if results diverge, this package is updated to match it.
 
-The hosted version also returns JSON with the same result shape:
+The hosted version also returns JSON with the same result shape for a completed validation. Its errors are shaped differently: an `error` field with HTTP status 400 and no `target`.
+
+The JSON request:
 
 ```sh
 curl -H "Accept: application/json" "https://turva.dev/llms-txt-validator?url=example.com"

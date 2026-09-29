@@ -1,5 +1,13 @@
 # turva-llms-txt-validator changelog
 
+## 0.3.13 (2026-09-29)
+
+A README-only release, after a fourth outside read. The README said input errors with `--json` return
+`{ "error", "target" }`, but an unknown option, a second domain and a missing domain return `error` only.
+It now separates the two shapes. It also states that a link title in parentheses is not read and that an
+unbracketed link target ends at its first closing parenthesis, and that the hosted JSON has the same shape
+only for a completed validation. No code or test changed.
+
 ## 0.3.12 (2026-09-29)
 
 A README-only release. The README said links are read the way CommonMark reads them, while 0.3.11's own
