@@ -787,7 +787,10 @@ test("validateHost names a typed path it does not use and still reads /llms.txt"
     assert.equal(byId(plain.checks, "input-path"), undefined);
     assert.equal(typed.checks[0].id, "input-path");
     assert.equal(typed.checks[0].status, "info");
-    assert.equal(typed.checks[0].detail, "/docs/llms.txt is not used, because the validator always reads /llms.txt at the root of the host");
+    // The path moved to its own field (V10-P3-01, round 3 Tek-542, mirrored from worker.js
+    // decision 19, Tek-526), so a JSON caller reads it without parsing the sentence.
+    assert.equal(typed.checks[0].value, "/docs/llms.txt");
+    assert.equal(typed.checks[0].detail, "This path is not used, because the validator always reads /llms.txt at the root of the host.");
     assert.equal(typed.summary, plain.summary, "information moves no summary");
     assert.equal(typed.checks.length, plain.checks.length + 1);
     assert.ok(!JSON.stringify(typed).includes("secret"), "the query is never shown");

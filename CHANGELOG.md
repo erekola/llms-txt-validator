@@ -1,5 +1,51 @@
 # turva-llms-txt-validator changelog
 
+## 0.3.11 (2026-09-29)
+
+A third outside re-check, run against 0.3.10, found a secret leak in the CLI, three regressions
+that 0.3.10's own reference-link and code-span changes introduced, one more reference-link gap and
+a diagnostic that put user input inside its sentence. Its finding codes are VN1, VREG1, VREG2,
+VREG3, VN3, VN2 and P3-01. Every logic change landed in the hosted validator first and is mirrored
+here.
+
+`maskLocation` returned a target that had no recognized scheme and no `//` unchanged. Passed to the
+CLI with `--json`, a target such as `user:secret@example.com/?token=x` came back in full, with its
+username and password, in the JSON `target` field. When such a string has an `@` before its first
+`/`, everything up to the last `@` is now masked as user information. A string with no `/` at all,
+such as `path@2x.png`, is still read as a path.
+
+The validator accepted a link reference definition in three places where CommonMark does not: on
+the continuation line of a paragraph, inside inline code, and with any trailing text taken as its
+title. A definition now has to follow a blank line, a heading, a list item or another definition.
+It must not sit inside inline code, and its title is either absent or written in double quotes,
+single quotes or parentheses. Separately, the text the links check reads was built by dropping the
+lines of fenced code blocks and joining what remained, so a link destination could run on across a
+fence. Fenced lines are now blanked where they stand.
+
+An inline code span could cross a block boundary unless that boundary was a literally empty line. A
+backtick in one list item then paired with a backtick in the next, and the link between them was
+read as code. A line holding only spaces or tabs, a new list item and a heading now end the search
+for the closing backtick.
+
+Mapping each link back to its source line restarted the line scan for every link, so in the outside
+measurement the work grew about three times with each doubling of the link count, where linear work
+would only double. The scan now moves forward once over the links, which are already in document
+order. Measured locally at 1 000, 2 000, 4 000 and 8 000 links, the median run took about 2, 4, 7
+and 13 ms.
+
+A shortcut reference link, `[label]` on its own with a matching definition, is now resolved, with
+the link text as its label. A definition line's own text is never read as a use of that label. The
+collapsed form `[label][]` already worked and now has a regression test. The re-check also listed
+definitions and labels that span several lines and an image used as a reference, and this release
+does not handle those.
+
+When `validateHost` is given an address with a path, the `input-path` check used to put that path
+inside its sentence. Its path now travels in its own `value` field, cut to 120 characters, and the
+sentence is fixed. The CLI's text output prints the value in front of the sentence, where the path
+appeared before.
+
+`test/round3.test.mjs` holds the 17 new cases. The suite now runs 120.
+
 ## 0.3.10 (2026-09-28)
 
 An outside re-check of this package against its 0.3.9 release found six more gaps, all mirrored

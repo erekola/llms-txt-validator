@@ -59,8 +59,16 @@ export function maskLocation(href, base) {
   const start = scheme ? scheme[0].length : 0;
   let from = start;
   while (from < s.length && (s[from] === "/" || s[from] === "\\")) from++;
-  // Without a scheme and two slashes there is no authority, and an @ is part of a path.
-  if (!scheme && from - start < 2) return s;
+  // Without a scheme and two slashes there is normally no authority, and an @ is part of a
+  // path ("path@2x.png" stays unmasked below). But when an @ still appears before the first
+  // /, the text ahead of it reads as userinfo even when the parser here does not recognise it
+  // as a scheme (an underscore, a leading digit or space, a stray control character), so that
+  // shape is masked too instead of let through (VN1, round 3 Tek-542).
+  if (!scheme && from - start < 2) {
+    const firstSlash = s.indexOf("/");
+    const firstAt = s.indexOf("@");
+    if (firstAt < 0 || firstSlash < 0 || firstAt > firstSlash) return s;
+  }
   // Nothing tells which @ of a refused target ends the user information, so everything up to the
   // last one is shown as ***. The mask is visible on purpose: three review rounds on 2026-09-22
   // measured every rule that guessed, and each one either returned a password that holds a slash
@@ -213,12 +221,23 @@ function isEscaped(s, i) {
 // span itself crosses a real line ending: a fenceless "`[a](b)\ncontinued`" used to be masked
 // only on its own line, so the second line escaped the mask and its bracket read as a real link
 // (outside review 2026-09-28). A span opens with a run of backticks and closes with the next run
-// of the same length anywhere in the text; a pair whose interior holds a blank line (two line
-// endings in a row) is not a code span in CommonMark, so it is left unmasked and its backticks
-// stay literal. An escaped first backtick is literal and the rest of its run still opens, while a
-// closing run is never escaped, because a backslash inside a code span is literal. Runs are
-// grouped by length and every group is read with one forward pointer, so the scan stays linear on
-// a document of unmatched runs.
+// of the same length anywhere in the text; a pair that crosses a block boundary, a blank line
+// (blank or made only of spaces and tabs), a heading line or a new list item, is not a code span
+// in CommonMark, so it is left unmasked and its backticks stay literal (VREG2, round 3 Tek-542:
+// backticks in two different list items used to enclose a real hyperlink between them). An
+// escaped first backtick is literal and the rest of its run still opens, while a closing run is
+// never escaped, because a backslash inside a code span is literal. Runs are grouped by length
+// and every group is read with one forward pointer, so the scan stays linear on a document of
+// unmatched runs.
+function crossesBlockBoundary(text, start, end) {
+  const inner = text.slice(start, end);
+  if (/\n[ \t]*\n/.test(inner)) return true;
+  const lines = inner.split("\n");
+  for (let i = 1; i < lines.length; i++) {
+    if (/^ {0,3}(#{1,6}(?:[ \t]|$)|[-*+][ \t]|\d{1,9}[.)][ \t])/.test(lines[i])) return true;
+  }
+  return false;
+}
 function codeSpanMask(text) {
   const mask = new Uint8Array(text.length);
   const runs = [];
@@ -244,7 +263,7 @@ function codeSpanMask(text) {
     const close = runs[list[p]];
     const start = r.escaped ? r.at + 1 : r.at;
     const end = close.at + close.len;
-    if (text.slice(start, end).indexOf("\n\n") === -1) mask.fill(1, start, end);
+    if (!crossesBlockBoundary(text, start, end)) mask.fill(1, start, end);
     k = list[p];
   }
   return mask;
@@ -258,15 +277,31 @@ function normalizeLinkLabel(s) {
 
 // Link reference definitions, "[label]: target", read once per document so a reference link
 // such as "[text][label]" can resolve against one written anywhere else in the same file,
-// before or after its use, the way CommonMark allows (outside review 2026-09-28). A title
-// after the target is not read, because nothing here compares it, and only the first
-// definition of a given label counts, per spec. A destination wrapped in angle brackets has
-// them stripped.
+// before or after its use, the way CommonMark allows (outside review 2026-09-28). A definition
+// only opens where a new block can start: at the top of the document, right after a blank
+// line, right after a heading or list marker line, or right after another definition line; a
+// line that continues open paragraph text is read as that paragraph, not as a fresh
+// definition, and a "definition" written inside an inline code span is the span's own literal
+// text (VREG1, round 3 Tek-542). A title after the target counts only in quotes or
+// parentheses on the same line; anything else trailing the target, such as a bare word, makes
+// the whole line not a definition, matching CommonMark instead of reading everything up to the
+// next space as the title's own value. Only the first definition of a given label counts, per
+// spec. A destination wrapped in angle brackets has them stripped.
 function collectLinkDefinitions(text) {
   const defs = new Map();
-  for (const line of text.split("\n")) {
-    const m = /^ {0,3}\[([^\]]+)\]:[ \t]*(<[^<>\n]*>|\S+)/.exec(line);
+  const lines = text.split("\n");
+  const code = codeSpanMask(text);
+  const starts = [];
+  { let offset = 0; for (const l of lines) { starts.push(offset); offset += l.length + 1; } }
+  const DEF_START = /^ {0,3}\[[^\]]+\]:/;
+  const BLOCK_START = /^ {0,3}(#{1,6}(?:[ \t]|$)|[-*+][ \t]|\d{1,9}[.)][ \t])/;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const prev = i > 0 ? lines[i - 1] : "";
+    if (prev.trim() !== "" && !DEF_START.test(prev) && !BLOCK_START.test(prev)) continue;
+    const m = /^ {0,3}\[([^\]]+)\]:[ \t]*(<[^<>\n]*>|\S+)([ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^()\n]*\)))?[ \t]*$/.exec(line);
     if (!m) continue;
+    if (code[starts[i] + line.indexOf("[")]) continue;
     const label = normalizeLinkLabel(m[1]);
     if (!label || defs.has(label)) continue;
     let dest = m[2];
@@ -391,6 +426,19 @@ function collectLinks(text, defs) {
           i = m;
           continue;
         }
+      }
+    } else {
+      // A shortcut reference, "[text]" alone with neither "(" nor "[" right after it, resolves
+      // against a definition using the link text itself as the label (VN2, round 3 Tek-542).
+      // Checked last, and only here, so it never overrides the full or collapsed reference
+      // forms above. Not tried when a ":" follows: that is the definition's own "[label]:"
+      // syntax, not a use of the label, and a definition line must not resolve against itself.
+      const label = text[j + 1] === ":" ? "" : normalizeLinkLabel(text.slice(i + 1, j));
+      const dest = label ? defs.get(label) : undefined;
+      if (dest !== undefined) {
+        out.push({ name: text.slice(i + 1, j), target: decodeAttributeValue(dest), at: i });
+        i = j;
+        continue;
       }
     }
     i = j;
@@ -571,23 +619,29 @@ export function validateLlmsTxt(f) {
   // reference link definition written anywhere in the prose resolves the same way for each
   // (outside review 2026-09-28, V2): "[text][label]" used to be recognized in the whole-document
   // links check but not in the per-line section scan, which only ever saw one list item line.
-  const proseText = lines.filter((l, i) => !fenced[i]).join("\n");
+  // Fenced lines are blanked rather than removed (VREG1, round 3 Tek-542): deleting them and
+  // joining the survivors let a link's own target span straight across a fenced code block, as
+  // if the fence had never separated the two halves.
+  const proseText = lines.map((l, i) => (fenced[i] ? "" : l)).join("\n");
   const linkDefs = collectLinkDefinitions(proseText);
   const proseLinks = collectLinks(proseText, linkDefs);
   // Which original line each recognized link starts on, so the section scan below can ask "does
   // this line carry a link" against the same whole-document result the links check itself uses,
   // instead of re-finding links one isolated line at a time (outside review 2026-09-28, V2).
+  // proseLinks is already ordered by position, so the line cursor only moves forward across the
+  // whole list instead of restarting the scan from line zero for every link, which used to make
+  // a many-link document's mapping step quadratic (VREG3/VN3, round 3 Tek-542). Each proseText
+  // line now sits at the same index as its source line, because fenced lines are blanked, not
+  // removed, so the index read off the start-offset table names the original line directly.
   const linkedLineIdx = new Set();
   {
-    const owners = [];
-    for (let i = 0; i < lines.length; i++) if (!fenced[i]) owners.push(i);
     const starts = [];
     let offset = 0;
     for (const pl of proseText.split("\n")) { starts.push(offset); offset += pl.length + 1; }
+    let idx = 0;
     for (const link of proseLinks) {
-      let idx = 0;
-      for (let k = 0; k < starts.length; k++) { if (starts[k] <= link.at) idx = k; else break; }
-      linkedLineIdx.add(owners[idx]);
+      while (idx + 1 < starts.length && starts[idx + 1] <= link.at) idx++;
+      linkedLineIdx.add(idx);
     }
   }
   const h2Count = lines.filter((l, i) => !fenced[i] && /^ {0,3}## /.test(l)).length;
@@ -1568,7 +1622,11 @@ export async function validateHost(input, opts = {}) {
   // A path in the typed address is not used, and the result says so first (mirrored from worker.js
   // v3.176.0). Information moves no summary and no exit code.
   const unusedPath = enteredPath(input);
-  if (unusedPath) checks.unshift({ id: "input-path", status: "info", label: "Path in the address you entered", detail: cut(unusedPath, 120) + " is not used, because the validator always reads /llms.txt at the root of the host" });
+  // The typed path goes on its own field with the same 120 character cut it always had (VREG,
+  // round 3 Tek-542, mirrored from worker.js decision 19, Tek-526), instead of being built into
+  // the sentence, so a JSON caller reads the raw value from one field instead of parsing it
+  // back out of a message meant for people.
+  if (unusedPath) checks.unshift({ id: "input-path", status: "info", label: "Path in the address you entered", value: cut(unusedPath, 120), detail: "This path is not used, because the validator always reads /llms.txt at the root of the host." });
   // Text quoted from the fetched file leaves without bidirectional controls (round 19,
   // V6-U1, mirrored from worker.js v3.164.0): a site's own H1 or summary could otherwise
   // read in another order here than in the file itself.

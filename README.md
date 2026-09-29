@@ -54,7 +54,7 @@ Use JSON for automation and strict mode when warnings should fail a CI step:
 npx --yes turva-llms-txt-validator example.com --json --strict
 ```
 
-Completed validation returns `{ target, summary, checks }`. Each check contains `{ id, status, label, detail }`. With `--json`, input and fetch errors return `{ "error": "...", "target": "..." }` and exit with code `2`. The target is the address given on the command line, with any user name, password and query value masked, and a network error adds `code`, such as `EAI_AGAIN`. An unknown option, a second domain and a missing domain are input errors too. `--help` exits with code `0`, and `--version` or `-V` prints the installed version and exits with code `0`.
+Completed validation returns `{ target, summary, checks }`. Each check contains `{ id, status, label, detail }`. The `input-path` check, which reports a path given with the domain and then ignored, also carries `value`, that path cut to 120 characters. With `--json`, input and fetch errors return `{ "error": "...", "target": "..." }` and exit with code `2`. The target is the address given on the command line, with any user name, password and query value masked, and a network error adds `code`, such as `EAI_AGAIN`. An unknown option, a second domain and a missing domain are input errors too. `--help` exits with code `0`, and `--version` or `-V` prints the installed version and exits with code `0`.
 
 ## What it checks
 
