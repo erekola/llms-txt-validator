@@ -69,7 +69,7 @@ Completed validation returns `{ target, summary, checks }`. Each check contains 
 | 5 | H2 sections group the content | none | No H2 sections, no section with a Markdown link list, a heading between the title and the first H2, or a second H1 |
 | 6 | Markdown links have names and absolute HTTP or HTTPS targets | none | Missing links, empty names, relative targets or targets that do not parse as HTTP or HTTPS URLs |
 | 7 | File is small enough to read cheaply | none | Over 50 KB, or truncated at the 256 KB read limit |
-| 8 | File contains no HTML markup | none | HTML tags found |
+| 8 | File contains no HTML markup | none | An opening tag, a closing tag or an HTML comment is found anywhere in the file, including inside code spans and fenced code. Autolinks such as `<https://example.com>` are not tags |
 
 Links are read the way CommonMark reads them for the forms listed here. A link inside inline code, after an escaped bracket or in an image does not count, and a link in an ordered list, a target in angle brackets and a target with a title in double or single quotes do. A title in parentheses is not read, so `[Guide](https://example.org/guide (Overview))` is not collected. An unbracketed target ends at its first closing parenthesis, so `https://example.org/docs_(v2)` is read only up to `https://example.org/docs_(v2`; write a target that contains parentheses in angle brackets. A link reference definition or label that spans several lines, and an image used as a reference, are not handled. A quote escaped with a backslash inside a link title, as in `[A](https://example.org/a "Ti\"tle\"")`, is not recognised, so that link is dropped. A title that spans a line break is dropped the same way. Nested brackets in a link label, as in `[A [x] B](https://example.org/a)`, drop the link. A heading is an H2 only when `##` is followed by a space, so `##` followed by a tab is not read as one. A link in a four-space indented code block counts as a link, but such a block does not count as a file list under an H2.
 
@@ -84,7 +84,7 @@ These checks are labelled **v2** in the output. They look for link relations in 
 | 9 | Home page points to its llms.txt | `rel="describedby"` has a non-empty target | `info` |
 | 10 | Home page points to a Markdown version | `rel="alternate"` has media type `text/markdown` and a non-empty target | `info` |
 
-The validator detects these declarations without fetching their targets. It reads the first 65,536 characters of the head, and when a relation is missing from a longer head the result says that only that part was read. A target is shown with its credentials and fragment removed and its query values masked. It also does not follow the links inside `llms.txt`, crawl the site or test whether an AI agent can complete a task there.
+The validator detects these declarations without fetching their targets. It reads the first 65,536 UTF-16 code units of the head after comments and the contents of script, style, title and template elements have been set aside, and when a relation is missing from a longer head the result says that only that part was read. A target is shown with its credentials and fragment removed and its query values masked. It also does not follow the links inside `llms.txt`, crawl the site or test whether an AI agent can complete a task there.
 
 ## Use from Node
 

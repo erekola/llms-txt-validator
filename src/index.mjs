@@ -711,7 +711,7 @@ export function validateLlmsTxt(f) {
   } else {
     add("size", "warn", "Small enough to be cheap to read", f.bytes + " bytes; consider moving detail to llms-full.txt");
   }
-  if (/<[a-z][a-z0-9-]*[\s>]/i.test(text)) {
+  if (/<\/?[a-z][a-z0-9-]*(?=[\s\/>])|<!--/i.test(text)) {
     add("no-html", "warn", "No HTML markup in the file", "HTML tags found; llms.txt should be plain markdown");
   } else {
     add("no-html", "pass", "No HTML markup in the file", "plain markdown");

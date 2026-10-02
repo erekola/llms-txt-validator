@@ -76,6 +76,18 @@ test("inline HTML warns", () => {
   assert.equal(byId(checks, "no-html").status, "warn");
 });
 
+test("self-closing tags without a space, closing tags and HTML comments warn", () => {
+  for (const line of ["<br/>", "<hr/>", "</div>", "<!-- note -->"]) {
+    const checks = validateLlmsTxt(good("# T\n\n> s\n\n## L\n\n- [a](https://a.example/x)\n" + line + "\n"));
+    assert.equal(byId(checks, "no-html").status, "warn", line);
+  }
+});
+
+test("an autolink is not read as HTML", () => {
+  const checks = validateLlmsTxt(good("# T\n\n> s\n\n## L\n\n- [a](https://a.example/x)\nSee <https://example.com> and <mailto:a@b.example>.\n"));
+  assert.equal(byId(checks, "no-html").status, "pass");
+});
+
 test("host normalization and public-host gate", () => {
   assert.equal(normalizeHostInput("Example.com"), "example.com");
   assert.equal(normalizeHostInput("https://example.com/path"), "example.com");

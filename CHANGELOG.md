@@ -1,5 +1,16 @@
 # turva-llms-txt-validator changelog
 
+## 0.3.15 (2026-10-02)
+
+The no-html check now also reports self-closing tags written without a space (`<br/>`, `<hr/>`), closing
+tags (`</div>`) and HTML comments (`<!-- note -->`). Before, only an opening tag followed by whitespace or
+`>` was found, so those three forms passed as plain markdown. The check reads the whole file as text and does
+not skip code spans or fenced code, as before. Autolinks such as `<https://example.com>` are still not
+tags. The change lets some files that passed fail the check with a warning, and under `--strict` such a file
+now exits 1. Both the hosted validator and this package use the same pattern. The README now states what the check detects
+and that the 65,536-character head read limit counts UTF-16 code units after comments and the contents of
+script, style, title and template elements have been set aside. Tests: two new cases.
+
 ## 0.3.14 (2026-09-29)
 
 A fifth outside read found that the CLI printed the password of a target with no scheme and no slash.
