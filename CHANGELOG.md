@@ -1,5 +1,11 @@
 # turva-llms-txt-validator changelog
 
+## 0.3.17 (2026-10-02)
+
+No change to what the validator checks or reports. Documentation only.
+
+- The README and SECURITY.md have a new section on verifying a release. It shows how to install a version in an empty directory and run `npm audit signatures`. It then compares the repository, the workflow and the commit in the provenance attestation with the release tag. It also says that provenance records where a release was built and does not show that the code is safe.
+
 ## 0.3.16 (2026-10-02)
 
 Nine repairs from an outside read of this package on 2026-10-02, tracked as Tek-560, made in the hosted validator

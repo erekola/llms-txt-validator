@@ -40,3 +40,7 @@ Please do not open a public issue for security reports.
 
 You can expect an initial response within one business day. If the issue is
 confirmed, a fix will be prioritized and you'll be kept informed of progress.
+
+## Verify a release
+
+To check a release, install it in an empty directory with `npm install turva-llms-txt-validator@<version> --ignore-scripts` and run `npm audit signatures`. The provenance attestation must name the repository `github.com/erekola/llms-txt-validator`, the workflow file `.github/workflows/publish.yml` and a commit that the release tag `v<version>` also points at. `gh api repos/erekola/llms-txt-validator/commits/v<version> --jq .sha` prints the tag's commit. The npm version page shows the attestation's commit under Provenance. Provenance names the repository, the workflow and the commit that produced a release. It does not prove that the code is safe.
