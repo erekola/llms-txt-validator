@@ -36,6 +36,8 @@ and does not cover.
 If you discover a security vulnerability, please report it privately
 by emailing **info@turva.dev**.
 
+Send encrypted reports to erik@turva.dev. The OpenPGP key is at https://turva.dev/pgp-key.asc.
+
 Please do not open a public issue for security reports.
 
 You can expect an initial response within one business day. If the issue is

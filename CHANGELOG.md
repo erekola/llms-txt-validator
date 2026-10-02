@@ -1,5 +1,21 @@
 # turva-llms-txt-validator changelog
 
+## 0.3.18 (2026-10-03)
+
+One repair from an outside read of 2026-10-02, tracked as Tek-562, made in the hosted validator first and
+mirrored here. It widens which files pass the sections check. A valid file that warned before no longer does,
+and under `--strict` it no longer exits 1.
+
+- An H2 written as `##` and a tab now counts as a section. So does a one-line setext H2, which is a
+  line of text followed by a line of hyphens. Both are H2 headings in CommonMark, and the validator warned "no H2 sections found"
+  on a file that held one. The text line must follow a blank line or the start of the file. A list item
+  above `---`, a thematic break, a bare `##` and anything inside a code fence are still not H2 headings.
+  The links under a setext H2 count as that section's file list.
+- The README now describes the H2 rule as the code applies it, where before it said a tab after
+  the two hashes was not read.
+- SECURITY.md names an encrypted route for reports: erik@turva.dev with the OpenPGP key at
+  https://turva.dev/pgp-key.asc.
+
 ## 0.3.17 (2026-10-02)
 
 No change to what the validator checks or reports. Documentation only.

@@ -530,10 +530,37 @@ function decodeDestination(s) {
 // starts a block of its own (heading, blockquote, list item, fence) is not paragraph text, so it
 // never becomes a setext title. Only a one-line title is read; a title over several lines is not
 // (Tek-560).
-function isSetextH1(line, next) {
-  if (typeof next !== "string" || !/^ {0,3}=+[ \t]*$/.test(next)) return false;
+function isSetextText(line) {
   if (!/^ {0,3}\S/.test(line)) return false;
   return !/^ {0,3}(?:#|>|[-*+](?:[ \t]|$)|\d{1,9}[.)](?:[ \t]|$)|`{3,}|~{3,})/.test(line);
+}
+function isSetextH1(line, next) {
+  if (typeof next !== "string" || !/^ {0,3}=+[ \t]*$/.test(next)) return false;
+  return isSetextText(line);
+}
+
+// Which lines are H2 headings, outside fences. One reader for every place that asks "is this an
+// H2": the section count, the section membership and the place where the late-summary scan stops.
+// An ATX H2 is "##" followed by a space or a tab (a bare "##" is not one, and "###" is deeper). A
+// setext H2 is one line of paragraph text, read by the same predicate as the setext H1 above,
+// that has a blank line or the start of the file before it and a run of hyphens directly after it.
+// A list item above "---", a thematic break and a line inside a fence are not H2 text. The
+// underline is returned separately because it is not content (Tek-562, outside review W30).
+function h2Lines(lines, fenced) {
+  const h2 = new Array(lines.length).fill(false);
+  const under = new Array(lines.length).fill(false);
+  for (let i = 0; i < lines.length; i++) {
+    if (fenced[i]) continue;
+    const l = lines[i];
+    if (/^ {0,3}##[ \t]/.test(l)) { h2[i] = true; continue; }
+    const next = lines[i + 1];
+    if (typeof next !== "string" || fenced[i + 1] || !/^ {0,3}-+[ \t]*$/.test(next)) continue;
+    if (!isSetextText(l) || /^ {0,3}([-*_])(?: *\1){2,} *$/.test(l)) continue;
+    if (i > 0 && lines[i - 1].trim() !== "") continue;
+    h2[i] = true;
+    under[i + 1] = true;
+  }
+  return { h2, under };
 }
 
 // The text of an ATX H1, or null when the line is not one. One to three leading spaces, a
@@ -662,10 +689,11 @@ export function validateLlmsTxt(f) {
     // v3.176.0). The status is warn either way, because the format places the summary directly
     // after the title.
     const fence = fenceMask(lines);
+    const lateH2 = h2Lines(lines, fence).h2;
     let late = -1;
     for (let i = h1End + 1; i < lines.length; i++) {
       if (fence[i]) continue;
-      if (/^ {0,3}## /.test(lines[i])) break;
+      if (lateH2[i]) break;
       if (/^ {0,3}>[ \t]*\S/.test(lines[i])) { late = i; break; }
     }
     add("summary", "warn", "Blockquote summary after the title", late === -1
@@ -706,7 +734,8 @@ export function validateLlmsTxt(f) {
       linkedLineIdx.add(idx);
     }
   }
-  const h2Count = lines.filter((l, i) => !fenced[i] && /^ {0,3}## /.test(l)).length;
+  const hm = h2Lines(lines, fenced);
+  const h2Count = hm.h2.filter(Boolean).length;
   // A section counts when it carries a file list. An H2 followed by a paragraph satisfied
   // this check until 2026-08-29, and the format puts each section's links in a list.
   // A heading between the title and the first H2, or a second H1 anywhere, is out of place,
@@ -729,7 +758,8 @@ export function validateLlmsTxt(f) {
         if (itemOpen) afterFence = true;
         continue;
       }
-      if (/^ {0,3}## /.test(l)) { inSection = true; counted = false; seenH2 = true; itemOpen = false; continue; }
+      if (hm.under[i]) continue;
+      if (hm.h2[i]) { inSection = true; counted = false; seenH2 = true; itemOpen = false; continue; }
       const h1 = /^ {0,3}#(?:[ \t]|$)/.test(l);
       if (misplaced === -1 && i > firstIdx && (h1 || (!seenH2 && /^ {0,3}#{3,6}(?:[ \t]|$)/.test(l)))) misplaced = i;
       if (h1) { inSection = false; itemOpen = false; continue; }
