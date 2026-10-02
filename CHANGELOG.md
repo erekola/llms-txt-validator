@@ -1,5 +1,42 @@
 # turva-llms-txt-validator changelog
 
+## 0.3.16 (2026-10-02)
+
+Nine repairs from an outside read of this package on 2026-10-02, tracked as Tek-560, made in the hosted validator
+first and mirrored here. Several of them change which files pass, so a file that passed before can now
+warn, and the other way round. Under `--strict` a warning exits 1.
+
+- A link label can no longer span a blank line. `[G`, a blank line and `H](https://example.com/g)` counted
+  as one link before. It is not a link now.
+- A backslash escape in a link target is resolved before the URL test, so `https\://example.com/g` is an
+  absolute URL. It was counted as relative before.
+- CR-only and CRLF line endings are turned into LF before the file is read. A file written with bare CR was
+  one line before, and the whole document was read as the title.
+- A setext title, one line of text underlined with `=`, now counts as the H1, and the summary is looked for
+  after the underline. The failure message names both forms. A title over several lines is still not read.
+- A link on a line that continues a list item, such as the line after a bare `-`, counts as that item's
+  link for the sections check. After a bare marker the next line counts only when it is indented to the
+  item's content column, which is 2 for `-` and 3 for `1.`, and a blank line right after a bare marker ends
+  the item. A line after a blank line counts only when it is indented to the content column, where the
+  content starts, so `-   item` needs 4 columns. A code fence indented less than the content column ends
+  the item. A fence indented to it keeps the item open, and the line after the fence then counts only when
+  it is indented to the content column too.
+- The no-html check needs a real tag. `a <b + c` is prose and no longer warns. A tag still warns when it has
+  its closing `>`, and so do a closing tag and an HTML comment. An attribute name can be any run of characters
+  other than white space, quotes, `<`, `>`, `/` and `=` that holds a Unicode letter, a Unicode digit or the
+  character `_`, so `<div @click="x">` and `<div *ngIf="x">` warn. A tag
+  still open at the end of the file, such as `<div class="x"`, has no closing `>` and does not warn.
+- The `<template>` scan for the discovery checks skips comments and the contents of elements such as script,
+  style, title and textarea, so a `</template>` written inside one no longer ends the template early.
+  A link relation placed after such a template is found now.
+- `maskLocation` runs in linear time on a target with many query keys. Output is unchanged. A target with 8,000 query keys
+  took about 2.8 seconds before and takes under 0.1 second now.
+- An empty blockquote is not a summary. That is a block of `>` lines in which no line has text after the
+  `>`. A block with any line of text is the summary, so `>` followed by `> Real summary` passes.
+
+The README links to SECURITY.md and CHANGELOG.md now use absolute GitHub URLs, because neither file is in
+the package. SECURITY.md now promises an initial response within one business day. Tests: sixteen new cases.
+
 ## 0.3.15 (2026-10-02)
 
 The no-html check now also reports self-closing tags written without a space (`<br/>`, `<hr/>`), closing

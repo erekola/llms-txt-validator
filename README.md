@@ -64,14 +64,14 @@ Completed validation returns `{ target, summary, checks }`. Each check contains 
 | --- | --- | --- | --- |
 | 1 | `/llms.txt` returns HTTP 200 | Non-200 response, rejected or excessive redirects | none |
 | 2 | Response is plain text | Body looks like an HTML page | The media type, read without its parameters, is neither `text/plain` nor `text/markdown` |
-| 3 | First non-empty line is a Markdown H1 | Missing H1, a title indented as a code block, or an H1 with no text | none |
-| 4 | Blockquote summary follows the title | none | Missing summary, or a blockquote after other text but before the first H2, named by its line |
+| 3 | First non-empty line is a Markdown H1, written `# Title` or as one line of text underlined with `=` | Missing H1, a title indented as a code block, or an H1 with no text | none |
+| 4 | Blockquote summary follows the title | none | Missing summary, a blockquote block in which no line has text after the `>`, or a blockquote after other text but before the first H2, named by its line |
 | 5 | H2 sections group the content | none | No H2 sections, no section with a Markdown link list, a heading between the title and the first H2, or a second H1 |
 | 6 | Markdown links have names and absolute HTTP or HTTPS targets | none | Missing links, empty names, relative targets or targets that do not parse as HTTP or HTTPS URLs |
 | 7 | File is small enough to read cheaply | none | Over 50 KB, or truncated at the 256 KB read limit |
-| 8 | File contains no HTML markup | none | An opening tag, a closing tag or an HTML comment is found anywhere in the file, including inside code spans and fenced code. Autolinks such as `<https://example.com>` are not tags |
+| 8 | File contains no HTML markup | none | An opening tag with its closing `>`, a closing tag or an HTML comment is found anywhere in the file, including inside code spans and fenced code. An attribute name is any run of characters other than white space, quotes, `<`, `>`, `/` and `=` that holds a Unicode letter, a Unicode digit or the character `_`, so `<div @click="x">` warns. Autolinks such as `<https://example.com>` and prose such as `a <b + c` are not tags. A tag still open at the end of the file, such as `<div class="x"`, has no closing `>` and does not warn |
 
-Links are read the way CommonMark reads them for the forms listed here. A link inside inline code, after an escaped bracket or in an image does not count, and a link in an ordered list, a target in angle brackets and a target with a title in double or single quotes do. A title in parentheses is not read, so `[Guide](https://example.org/guide (Overview))` is not collected. An unbracketed target ends at its first closing parenthesis, so `https://example.org/docs_(v2)` is read only up to `https://example.org/docs_(v2`; write a target that contains parentheses in angle brackets. A link reference definition or label that spans several lines, and an image used as a reference, are not handled. A quote escaped with a backslash inside a link title, as in `[A](https://example.org/a "Ti\"tle\"")`, is not recognised, so that link is dropped. A title that spans a line break is dropped the same way. Nested brackets in a link label, as in `[A [x] B](https://example.org/a)`, drop the link. A heading is an H2 only when `##` is followed by a space, so `##` followed by a tab is not read as one. A link in a four-space indented code block counts as a link, but such a block does not count as a file list under an H2.
+Links are read the way CommonMark reads them for the forms listed here. A link inside inline code, after an escaped bracket or in an image does not count, and a link in an ordered list, a target in angle brackets and a target with a title in double or single quotes do. A title in parentheses is not read, so `[Guide](https://example.org/guide (Overview))` is not collected. An unbracketed target ends at its first closing parenthesis, so `https://example.org/docs_(v2)` is read only up to `https://example.org/docs_(v2`. Write a target that contains parentheses in angle brackets. A link reference definition or label that spans several lines, and an image used as a reference, are not handled. A quote escaped with a backslash inside a link title, as in `[A](https://example.org/a "Ti\"tle\"")`, is not recognised, so that link is dropped. A title that spans a line break is dropped the same way. Nested brackets in a link label, as in `[A [x] B](https://example.org/a)`, drop the link. A heading is an H2 only when `##` is followed by a space, so `##` followed by a tab is not read as one. A link in a four-space indented code block counts as a link, but such a block does not count as a file list under an H2. A backslash escape in a target is resolved before the URL test, so `https\://example.org/guide` is read as `https://example.org/guide`. A link label cannot span a blank line. A link on a line that continues a list item, such as the line after a bare `-`, counts as that item's link. After a bare marker the next line counts only when it is indented to the item's content column, which is 2 for `-` and 3 for `1.`, and a blank line right after a bare marker ends the item. After a blank line inside an item, a line counts only when it is indented to the content column, where the item's text starts, so `-   item` needs 4 columns. A code fence indented less than that column ends the item. A fence indented to it keeps the item open, and the line after the fence then counts only when it is indented to that column too. CR and CRLF line endings are read as LF. A setext title, which is a text line underlined with `=`, is read only when it is a single line.
 
 Some failures stop the file checks early. For example, an HTML response is reported as a failed plain-text check rather than parsed as Markdown.
 
@@ -130,7 +130,7 @@ The default validation requests two documents: `https://<host>/llms.txt` and `ht
 
 **DNS resolution is not checked for private addresses.** A syntactically public domain can resolve to a private IP, so if you expose this package through a service that accepts untrusted domains, enforce private-address restrictions at the network layer. Local and CI runs use their own network policy. The hosted validator runs on the Cloudflare edge.
 
-For vulnerability reporting and supported versions, see [SECURITY.md](SECURITY.md).
+For vulnerability reporting and supported versions, see [SECURITY.md](https://github.com/erekola/llms-txt-validator/blob/main/SECURITY.md).
 
 ## Hosted version and source
 
@@ -146,7 +146,7 @@ curl -H "Accept: application/json" "https://turva.dev/llms-txt-validator?url=exa
 
 In Windows PowerShell, use `curl.exe` if `curl` resolves to `Invoke-WebRequest`.
 
-The package has no runtime dependencies. The repository's release workflow uses npm trusted publishing with provenance. See [SECURITY.md](SECURITY.md) for details and [CHANGELOG.md](CHANGELOG.md) for releases.
+The package has no runtime dependencies. The repository's release workflow uses npm trusted publishing with provenance. See [SECURITY.md](https://github.com/erekola/llms-txt-validator/blob/main/SECURITY.md) for details and [CHANGELOG.md](https://github.com/erekola/llms-txt-validator/blob/main/CHANGELOG.md) for releases.
 
 ## Check HTML and Markdown content
 

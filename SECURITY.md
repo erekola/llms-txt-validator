@@ -38,5 +38,5 @@ by emailing **info@turva.dev**.
 
 Please do not open a public issue for security reports.
 
-You can expect an initial response within a few days. If the issue is
+You can expect an initial response within one business day. If the issue is
 confirmed, a fix will be prioritized and you'll be kept informed of progress.

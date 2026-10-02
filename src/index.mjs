@@ -48,7 +48,14 @@ export function maskLocation(href, base) {
   if (u && u.host) {
     u.username = "";
     u.password = "";
-    for (const key of Array.from(u.searchParams.keys())) u.searchParams.set(key, "***");
+    // One pass (Tek-560): a Set keeps the first-seen key order and collapses duplicates, and the
+    // masked query is built once. Setting each key on u.searchParams re-serializes the whole
+    // query every time, which is quadratic in the number of keys. An empty query is left alone,
+    // so "?" stays "?" as before.
+    const maskedQuery = new URLSearchParams();
+    // append, not set: the keys are already unique, and set searches the whole list on every call.
+    for (const key of new Set(u.searchParams.keys())) maskedQuery.append(key, "***");
+    if (maskedQuery.toString() !== "") u.search = maskedQuery.toString();
     u.hash = "";
     return u.href;
   }
@@ -350,6 +357,14 @@ function collectLinks(text, defs) {
     return at;
   };
   const isBlank = (c) => c === " " || c === "\t";
+  // A blank line ends a paragraph, and a link label cannot reach across one (Tek-560). True when
+  // the line break at p is followed by a line that holds only spaces and tabs, or by the end.
+  const blankAt = (p) => {
+    if (text[p] !== "\n") return false;
+    let q = p + 1;
+    while (q < text.length && isBlank(text[q])) q++;
+    return q >= text.length || text[q] === "\n";
+  };
   // Spaces, tabs and at most one line ending may stand around the destination and the title, as
   // CommonMark allows; "[a](  b  )" and a ")" on the next line were missed until the review of
   // 2026-09-27. A blank line still ends the link.
@@ -398,7 +413,7 @@ function collectLinks(text, defs) {
   // nested bracket, the way one always was.
   const skipImage = (k) => {
     let m = k + 1;
-    while (m < text.length && text[m] !== "]" && text[m] !== "[") m += text[m] === "\\" ? 2 : 1;
+    while (m < text.length && text[m] !== "]" && text[m] !== "[" && !blankAt(m)) m += text[m] === "\\" ? 2 : 1;
     if (m >= text.length || text[m] !== "]" || text[m + 1] !== "(") return null;
     const t = readTarget(m + 2);
     return t ? t.end + 1 : null;
@@ -408,7 +423,7 @@ function collectLinks(text, defs) {
     if (i > 0 && text[i - 1] === "!" && !isEscaped(text, i - 1)) continue;
     let j = i + 1;
     for (;;) {
-      while (j < text.length && text[j] !== "]" && text[j] !== "[") j += text[j] === "\\" ? 2 : 1;
+      while (j < text.length && text[j] !== "]" && text[j] !== "[" && !blankAt(j)) j += text[j] === "\\" ? 2 : 1;
       if (j >= text.length || text[j] !== "[") break;
       if (code[j] || text[j - 1] !== "!" || isEscaped(text, j - 1)) break;
       const after = skipImage(j);
@@ -416,10 +431,11 @@ function collectLinks(text, defs) {
       j = after;
     }
     if (j >= text.length) break;
+    if (text[j] === "\n") { i = j; continue; }
     if (text[j] === "[") { i = j - 1; continue; }
     if (text[j + 1] === "(") {
       const t = readTarget(j + 2);
-      if (t) { out.push({ name: text.slice(i + 1, j), target: decodeAttributeValue(t.target), at: i }); i = t.end; continue; }
+      if (t) { out.push({ name: text.slice(i + 1, j), target: decodeDestination(t.target), at: i }); i = t.end; continue; }
       i = j + 1;
       continue;
     }
@@ -431,7 +447,7 @@ function collectLinks(text, defs) {
         const label = normalizeLinkLabel(rawLabel === "" ? text.slice(i + 1, j) : rawLabel);
         const dest = label && defs.get(label);
         if (dest !== undefined) {
-          out.push({ name: text.slice(i + 1, j), target: decodeAttributeValue(dest), at: i });
+          out.push({ name: text.slice(i + 1, j), target: decodeDestination(dest), at: i });
           i = m;
           continue;
         }
@@ -445,7 +461,7 @@ function collectLinks(text, defs) {
       const label = text[j + 1] === ":" ? "" : normalizeLinkLabel(text.slice(i + 1, j));
       const dest = label ? defs.get(label) : undefined;
       if (dest !== undefined) {
-        out.push({ name: text.slice(i + 1, j), target: decodeAttributeValue(dest), at: i });
+        out.push({ name: text.slice(i + 1, j), target: decodeDestination(dest), at: i });
         i = j;
         continue;
       }
@@ -498,6 +514,26 @@ function fenceMask(lines) {
 // more than one line, and a per-line rescan cannot see that (outside review 2026-09-28, V2).
 function listItemHasLink(l, hasLink) {
   return !!hasLink && /^ {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]/.test(l);
+}
+
+// The destination of a link as the URL test should see it. CommonMark lets a backslash escape any
+// ASCII punctuation character, so "https\://example.com" is the destination "https://example.com".
+// Backslash escapes and character references are read in one pass over the source, so an escaped
+// ampersand stays literal text and is not decoded a second time (Tek-560).
+function decodeDestination(s) {
+  const escapeAt = /(\\[!-\/:-@\[-`{-~])/;
+  return String(s).split(escapeAt).map((part) => (part.length === 2 && part[0] === "\\" && /[!-\/:-@\[-`{-~]/.test(part[1]) ? part[1] : decodeAttributeValue(part))).join("");
+}
+
+// A setext H1: one text line indented at most three spaces whose next line is a run of "=" (also
+// indented at most three spaces, trailing spaces allowed). Returns true for the pair. A line that
+// starts a block of its own (heading, blockquote, list item, fence) is not paragraph text, so it
+// never becomes a setext title. Only a one-line title is read; a title over several lines is not
+// (Tek-560).
+function isSetextH1(line, next) {
+  if (typeof next !== "string" || !/^ {0,3}=+[ \t]*$/.test(next)) return false;
+  if (!/^ {0,3}\S/.test(line)) return false;
+  return !/^ {0,3}(?:#|>|[-*+](?:[ \t]|$)|\d{1,9}[.)](?:[ \t]|$)|`{3,}|~{3,})/.test(line);
 }
 
 // The text of an ATX H1, or null when the line is not one. One to three leading spaces, a
@@ -560,7 +596,9 @@ export function validateLlmsTxt(f) {
   // document than the fetched one for the exact same bytes until this was measured (outside
   // review 2026-09-28); the h1-title check saw the mark as part of the first line and failed a
   // document that would pass when fetched.
-  const text = f.text.charCodeAt(0) === 0xFEFF ? f.text.slice(1) : f.text;
+  // CR-only and CRLF line endings become LF here (Tek-560): a file written with bare CR was one
+  // line for the old split and read as a title with the whole document in it.
+  const text = (f.text.charCodeAt(0) === 0xFEFF ? f.text.slice(1) : f.text).replace(/\r\n?/g, "\n");
   const ct = (f.contentType || "").toLowerCase();
   const looksHtml = /^\s*(<!doctype|<html|<head|<body)/i.test(text);
   if (looksHtml) {
@@ -575,7 +613,7 @@ export function validateLlmsTxt(f) {
   } else {
     add("content-type", "warn", "Response is plain text", "content-type is " + (ct.split(";")[0] || "missing") + ", text/plain or text/markdown is the convention");
   }
-  const lines = text.split(/\r?\n/);
+  const lines = text.split("\n");
   const firstIdx = lines.findIndex((l) => l.trim() !== "");
   const firstRaw = firstIdx === -1 ? "" : lines[firstIdx];
   const first = firstRaw.trim();
@@ -584,14 +622,19 @@ export function validateLlmsTxt(f) {
   // "    # Site" passed as the H1 until 2026-08-29. CommonMark allows three spaces.
   // h1Title reads the heading the way CommonMark does, its closing run included (Tek-496).
   const title = h1Title(firstRaw);
-  if (title) {
+  // A setext H1 (a text line, then a line of "=") is an H1 as well (Tek-560). The summary and the
+  // later scans start after its underline.
+  const setext = title === null && firstIdx !== -1 && isSetextH1(firstRaw, lines[firstIdx + 1]);
+  const h1End = setext ? firstIdx + 1 : firstIdx;
+  if (title || setext) {
     add("h1-title", "pass", "Starts with an H1 title", JSON.stringify(cut(first, 80)));
   } else if (title === "") {
     add("h1-title", "fail", "Starts with an H1 title", "the H1 has no text; the format requires the project name there");
   } else {
-    add("h1-title", "fail", "Starts with an H1 title", "the first non-empty line should be a markdown H1 (# Site name)");
+    add("h1-title", "fail", "Starts with an H1 title", "the first non-empty line should be a markdown H1 (# Site name, or one line of text underlined with =)");
   }
-  const afterH1 = lines.slice(firstIdx + 1).find((l) => l.trim() !== "") || "";
+  const afterIdx = lines.findIndex((l, i) => i > h1End && l.trim() !== "");
+  const afterH1 = afterIdx === -1 ? "" : lines[afterIdx];
   // Read the same way as the H1 check and the "late" blockquote search below: at most three
   // leading spaces, per CommonMark. A trim-first prefix test used to erase the difference, so
   // a four-space or tab-indented code block right after the title passed as the summary until
@@ -601,8 +644,18 @@ export function validateLlmsTxt(f) {
   // same way, and four or more leading spaces stay indented code, not a blockquote (outside
   // review 2026-09-28: a literal space was required, so a tab or no space at all warned as
   // missing).
+  // The blockquote directly under the title is one block of consecutive ">" lines, and it is the
+  // summary when any line of it has text (Tek-560). ">" followed by "> Real summary" passes, and a
+  // block whose every line is empty (">" alone, or ">" on several lines) is an empty blockquote and
+  // warns. A nested ">>" or "> >" line counts as text, as it did in 0.3.15.
+  let summaryLine = "";
   if (/^ {0,3}>/.test(afterH1)) {
-    add("summary", "pass", "Blockquote summary after the title", JSON.stringify(cut(afterH1.trim(), 80)));
+    for (let i = afterIdx; i < lines.length && /^ {0,3}>/.test(lines[i]); i++) {
+      if (/^ {0,3}>[ \t]*\S/.test(lines[i])) { summaryLine = lines[i]; break; }
+    }
+  }
+  if (summaryLine !== "") {
+    add("summary", "pass", "Blockquote summary after the title", JSON.stringify(cut(summaryLine.trim(), 80)));
   } else {
     // A blockquote further down, before the first H2, is a summary in the wrong place and not a
     // missing one, and the detail says which (outside retest 2026-09-26, mirrored from worker.js
@@ -610,10 +663,10 @@ export function validateLlmsTxt(f) {
     // after the title.
     const fence = fenceMask(lines);
     let late = -1;
-    for (let i = firstIdx + 1; i < lines.length; i++) {
+    for (let i = h1End + 1; i < lines.length; i++) {
       if (fence[i]) continue;
       if (/^ {0,3}## /.test(lines[i])) break;
-      if (/^ {0,3}>/.test(lines[i])) { late = i; break; }
+      if (/^ {0,3}>[ \t]*\S/.test(lines[i])) { late = i; break; }
     }
     add("summary", "warn", "Blockquote summary after the title", late === -1
       ? "recommended by the format (> one-line summary), not required"
@@ -661,15 +714,60 @@ export function validateLlmsTxt(f) {
   // Both passed until 2026-09-27 (Tek-496). The first one is named in the detail.
   let sectionsWithList = 0, misplaced = -1;
   {
-    let inSection = false, counted = false, seenH2 = false;
+    let inSection = false, counted = false, seenH2 = false, itemOpen = false, itemGap = false, itemEmpty = false, itemCol = 0, afterFence = false;
+    // Width of the leading white space of a line in columns, a tab running to the next multiple of 4.
+    const indentWidth = (s) => { let c = 0; for (const ch of s) { if (ch === " ") c++; else if (ch === "\t") c += 4 - (c % 4); else break; } return c; };
     for (let i = 0; i < lines.length; i++) {
       const l = lines[i];
-      if (fenced[i]) continue;
-      if (/^ {0,3}## /.test(l)) { inSection = true; counted = false; seenH2 = true; continue; }
+      // A code fence indented less than the item's content column closes the open item, so a link
+      // after it is not that item's link. The content column is where the item's text starts, 2 for
+      // "- item" and 4 for "-   item". A fence indented to that column is inside the item and keeps
+      // it open, as in CommonMark, but the line after it then counts only when it is indented to
+      // that column too, because a lazy continuation cannot follow a fence.
+      if (fenced[i]) {
+        if (l.trim() !== "" && indentWidth(l) < itemCol) itemOpen = false;
+        if (itemOpen) afterFence = true;
+        continue;
+      }
+      if (/^ {0,3}## /.test(l)) { inSection = true; counted = false; seenH2 = true; itemOpen = false; continue; }
       const h1 = /^ {0,3}#(?:[ \t]|$)/.test(l);
       if (misplaced === -1 && i > firstIdx && (h1 || (!seenH2 && /^ {0,3}#{3,6}(?:[ \t]|$)/.test(l)))) misplaced = i;
-      if (h1) { inSection = false; continue; }
-      if (inSection && !counted && listItemHasLink(l, linkedLineIdx.has(i))) { sectionsWithList++; counted = true; }
+      if (h1) { inSection = false; itemOpen = false; continue; }
+      // A link on a line that continues an open list item counts as that item's link (Tek-560):
+      // a marker alone on its line, a link on the next line, or a lazy continuation line. A blank
+      // line keeps the item open only for a line indented to the item's content column after it. A
+      // heading, a blockquote or a thematic break ends the item. An empty marker takes no lazy
+      // continuation (CommonMark): the next line counts only when indented to the content column,
+      // and a blank line right after the empty marker closes the item.
+      if (l.trim() === "") { if (itemEmpty) itemOpen = false; itemGap = itemOpen; continue; }
+      const fromFence = afterFence;
+      afterFence = false;
+      if (/^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/.test(l)) {
+        itemOpen = true;
+        itemGap = false;
+        itemEmpty = /^ {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]*$/.test(l);
+        {
+          // Content column: where the text after the marker starts when one to four spaces
+          // separate them, and the column after the marker when the line is empty or five or
+          // more spaces follow, which makes the rest indented code.
+          const mk = /^( {0,3})([-*+]|\d{1,9}[.)])([ \t]*)/.exec(l);
+          const markerEnd = mk[1].length + mk[2].length;
+          let c = markerEnd;
+          for (const ch of mk[3]) c += ch === "\t" ? 4 - (c % 4) : 1;
+          itemCol = (mk[0].length === l.length || c - markerEnd > 4) ? markerEnd + 1 : c;
+        }
+        if (inSection && !counted && listItemHasLink(l, linkedLineIdx.has(i))) { sectionsWithList++; counted = true; }
+        continue;
+      }
+      if (/^ {0,3}(?:#{1,6}(?:[ \t]|$)|>|([-*_])(?: *\1){2,} *$)/.test(l)) { itemOpen = false; continue; }
+      const indented = indentWidth(l) >= itemCol;
+      if (itemOpen && (!itemGap || indented) && (!itemEmpty || indented) && (!fromFence || indented)) {
+        if (inSection && !counted && linkedLineIdx.has(i)) { sectionsWithList++; counted = true; }
+        itemGap = false;
+        itemEmpty = false;
+      } else {
+        itemOpen = false;
+      }
     }
   }
   if (h2Count > 0 && sectionsWithList > 0) {
@@ -711,7 +809,15 @@ export function validateLlmsTxt(f) {
   } else {
     add("size", "warn", "Small enough to be cheap to read", f.bytes + " bytes; consider moving detail to llms-full.txt");
   }
-  if (/<\/?[a-z][a-z0-9-]*(?=[\s\/>])|<!--/i.test(text)) {
+  // A tag needs its closing ">" (Tek-560): an opening tag with well formed attributes, a closing tag
+  // or a comment start. "a <b + c" is prose and no longer warns. An attribute name is any run of
+  // characters other than white space, quotes, "<", ">", "/" and "=" that holds a Unicode letter,
+  // a Unicode digit or an underscore, so "@click", "*ngIf", ":class" and "ä" count, while a bare
+  // operator such as the "+" in "a <b + c > d" does not. The tag name itself is ASCII. An unquoted
+  // value may not start with a quote, which keeps the quoted and the unquoted form from matching
+  // the same text, so the scan stays linear. A tag still open at the end of the file, as in
+  // '<div class="x"', has no closing ">" and does not warn.
+  if (/<[a-zA-Z][a-zA-Z0-9-]*(?:\s+[^\s"'<>\/=\p{L}\p{N}_]*[\p{L}\p{N}_][^\s"'<>\/=]*(?:\s*=\s*(?:"[^"]*"|'[^']*'|(?!["'])[^\s<>]+))?)*\s*\/?>|<\/[a-zA-Z][a-zA-Z0-9-]*\s*>|<!--/u.test(text)) {
     add("no-html", "warn", "No HTML markup in the file", "HTML tags found; llms.txt should be plain markdown");
   } else {
     add("no-html", "pass", "No HTML markup in the file", "plain markdown");
@@ -1297,36 +1403,55 @@ function scriptEnd(lower, from) {
 }
 
 // The end of a nested template: templates count, so an inner </template> does not close
-// an outer one. Returns the index after the closing tag, or -1 when it never closes.
+// an outer one. Returns the index after the closing tag, or -1 when it never closes. A comment
+// or a raw text element inside the template is skipped whole before its markers are counted.
+// Raw text and RCDATA elements whose content is text for the tokenizer, so a "<template" or a
+// "</template" inside one is not a tag. script is read by scriptEnd, the others by rawTextEnd.
+const TEMPLATE_RAW_TEXT = ["script", "style", "title", "noscript", "noframes", "textarea", "xmp", "iframe", "noembed"];
 function templateEnd(lower, from) {
-  let depth = 1;
-  // Both searches resume from their own previous hit. Restarting either one from a shared
-  // cursor is quadratic: "</templateX" repeated made every round scan to the end of the
-  // input again, and 1 MB of it measured 15 686 ms.
-  let open = lower.indexOf("<template", from);
-  let close = lower.indexOf("</template", from);
+  let depth = 1, i = from;
+  // One forward scan: every "<" is looked at once and the cursor never moves back, so the cost
+  // stays linear (restarting a search each round measured 15 686 ms on 1 MB of "</templateX").
+  // Comments and raw text elements are stepped over whole, because the markers inside them are
+  // text for a parser and counted before as if they were tags (Tek-560).
   for (;;) {
-    if (close === -1) return -1;
-    if (open !== -1 && open < close) {
-      if (isTagBoundary(lower[open + 9])) depth++;
-      open = lower.indexOf("<template", open + 9);
+    const lt = lower.indexOf("<", i);
+    if (lt === -1) return -1;
+    if (lower.startsWith("<!--", lt)) {
+      if (lower.startsWith("<!-->", lt)) { i = lt + 5; continue; }
+      if (lower.startsWith("<!--->", lt)) { i = lt + 6; continue; }
+      const cend = commentEnd(lower, lt + 4);
+      if (cend === -1) return -1;
+      i = cend;
       continue;
     }
-    let j = close + 10;
-    j = skipSpace(lower, j);
-    if (lower[j] === "/") j = skipSpace(lower, j + 1);
-    if (lower[j] !== ">") {
-      // Not an end tag: for the tokenizer the rest of the name runs to the next ">", and a
-      // "<" inside it is part of the name rather than a new tag.
-      const bogus = lower.indexOf(">", close + 10);
-      if (bogus === -1) return -1;
-      close = lower.indexOf("</template", bogus + 1);
-      if (open !== -1 && open < bogus) open = lower.indexOf("<template", bogus + 1);
+    if (lower.startsWith("</template", lt)) {
+      let j = skipSpace(lower, lt + 10);
+      if (lower[j] === "/") j = skipSpace(lower, j + 1);
+      if (lower[j] !== ">") {
+        // Not an end tag: for the tokenizer the rest of the name runs to the next ">", and a
+        // "<" inside it is part of the name rather than a new tag.
+        const bogus = lower.indexOf(">", lt + 10);
+        if (bogus === -1) return -1;
+        i = bogus + 1;
+        continue;
+      }
+      depth--;
+      if (depth === 0) return j + 1;
+      i = j + 1;
       continue;
     }
-    depth--;
-    if (depth === 0) return j + 1;
-    close = lower.indexOf("</template", j + 1);
+    if (lower.startsWith("<template", lt) && isTagBoundary(lower[lt + 9])) { depth++; i = lt + 9; continue; }
+    const rawName = TEMPLATE_RAW_TEXT.find((n) => lower.startsWith(n, lt + 1) && isTagBoundary(lower[lt + 1 + n.length]));
+    if (rawName) {
+      const gt = tagEnd(lower, lt);
+      if (gt === -1) return -1;
+      const rend = rawName === "script" ? scriptEnd(lower, gt + 1) : rawTextEnd(lower, rawName, gt + 1);
+      if (rend === -1) return -1;
+      i = rend;
+      continue;
+    }
+    i = lt + 1;
   }
 }
 
