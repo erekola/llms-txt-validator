@@ -1,5 +1,23 @@
 # turva-llms-txt-validator changelog
 
+## 0.3.20 (2026-10-03)
+
+This release is one repair from an outside re-check of 2026-10-03, tracked as Tek-565, made in the hosted
+validator first and mirrored here. The hosted validator gets the same change in site 3.203.2. It narrows
+which files pass the sections check. A file with a second H1 written as a setext heading right after an
+indented code line, which was `valid` before, is now `valid with warnings`, and under `--strict` it exits 1.
+
+- A line indented four columns or more that does not continue a paragraph is an indented code block in
+  CommonMark. Text after it starts a new paragraph. A second H1 written as a line of text over a run of `=`
+  after such a line is now out of place, like `# Second title`, with the same detail and the line number of
+  the text line. A four-space line right after paragraph text is still a continuation line, so a paragraph, an
+  indented line and then a line over `=` stay one paragraph and are not read as a second H1. Blank lines and
+  indented lines inside a list item belong to the item, so they are not read as code either. In a block
+  quote, in an HTML block that ends at a blank line and right after a link reference definition, an
+  indented line is not read as code up to the next blank line. An HTML block that starts with a comment,
+  `<pre>`, `<script>`, `<style>`, `<textarea>`, `<?`, `<![CDATA[` or `<!` followed by a letter runs to its
+  end marker instead, even past blank lines.
+
 ## 0.3.19 (2026-10-03)
 
 Two repairs from an outside re-check of 2026-10-03, tracked as Tek-564, made in the hosted validator first and

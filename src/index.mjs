@@ -544,10 +544,22 @@ function isSetextH1(line, next) {
 // one, it stays paragraph text) and a link reference definition. Only the later-H1 reading skips
 // them; the title reading keeps its Tek-560 predicate. QA 2 of Tek-564 measured "---", "<div>" and
 // "[a]: url" over a run of "=" warning as a second H1 although 0.3.18 passed them.
+const HTML_BLOCK_START = /^ {0,3}<(?:[A-Za-z][A-Za-z0-9-]*(?:[\s\/>]|$)|\/[A-Za-z][A-Za-z0-9-]*(?:[\s>]|$)|!--|\?|![A-Za-z]|!\[CDATA\[)/;
+const LINK_REF_DEF = /^ {0,3}\[[^\]]+\]:/;
+// HTML blocks of CommonMark types 1 to 5 end at a marker, not at a blank line: <pre>, <script>,
+// <style> and <textarea> at "</...>", "<!--" at "-->", "<?" at "?>", "<!X" at ">" and "<![CDATA[" at
+// "]]>". Each entry is [start, end]; the end marker is looked for after the start on the same line.
+const RAW_HTML_BLOCKS = [
+  [/^ {0,3}<(?:pre|script|style|textarea)(?:[ \t>]|$)/i, /<\/(?:pre|script|style|textarea)>/i],
+  [/^ {0,3}<!--/, /-->/],
+  [/^ {0,3}<\?/, /\?>/],
+  [/^ {0,3}<!\[CDATA\[/, /\]\]>/],
+  [/^ {0,3}<![A-Za-z]/, />/]
+];
 function startsOtherBlock(line) {
   return /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(line)
-    || /^ {0,3}<(?:[A-Za-z][A-Za-z0-9-]*(?:[\s\/>]|$)|\/[A-Za-z][A-Za-z0-9-]*(?:[\s>]|$)|!--|\?|![A-Za-z]|!\[CDATA\[)/.test(line)
-    || /^ {0,3}\[[^\]]+\]:/.test(line);
+    || HTML_BLOCK_START.test(line)
+    || LINK_REF_DEF.test(line);
 }
 
 // Setext H1 lines after the title (Tek-564). A second H1 written as one text line over a run of "="
@@ -557,13 +569,49 @@ function startsOtherBlock(line) {
 // blank line is a continuation line, so a title over several lines is not read as a heading, and
 // text that starts with "#" is not an H1 (isSetextText). The underline is returned separately
 // because it is not a heading and not content.
+// An indented code block is not a paragraph (Tek-565, outside review W46): a line indented four
+// columns or more that does not continue a paragraph is code, so the text after it starts a new
+// paragraph and "Title" over "===" there is a second H1. A four-space line right after paragraph
+// text stays a continuation line (the accepted Tek-564 limit). The exception is a list item: its
+// blank lines and indented lines belong to the item as continuation paragraphs, not as code, so
+// while a list item is open (listCtx) an indented line is read as before. The list context ends at
+// a thematic break or an ATX heading, or at a line with no indent after a blank line. When unsure
+// the function stays in the list context, which is the 0.3.19 reading. A block quote, an HTML block
+// and a link reference definition keep the old reading too, until the next blank line, and an HTML
+// block of type 1 to 5 (<pre>, a comment, <?, <!X, CDATA) until its end marker: an indented line
+// there continues the quote paragraph or the HTML block, or follows a "=" line that is itself
+// paragraph text, and is not code.
 function laterSetextH1(lines, fenced) {
   const text = new Array(lines.length).fill(false);
   const under = new Array(lines.length).fill(false);
   let open = false;
+  let listCtx = false;
+  let blankBefore = false;
+  let quoteCtx = false;
+  let htmlCtx = false;
+  let rawEnd = null;
+  let rawDone = false;
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
-    if (fenced[i] || l.trim() === "") { open = false; continue; }
+    if (rawDone) { htmlCtx = false; rawDone = false; }
+    if (fenced[i]) { open = false; continue; }
+    if (l.trim() === "") { open = false; blankBefore = true; quoteCtx = false; if (!rawEnd) htmlCtx = false; continue; }
+    const indented = /^(?: {4}| {0,3}\t)/.test(l);
+    if (/^ ?#{1,6}(?:[ \t]|$)/.test(l) || /^ ?([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(l)) listCtx = false;
+    else if (/^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/.test(l)) listCtx = true;
+    else if (blankBefore && /^ ?[^ \t]/.test(l)) listCtx = false;
+    blankBefore = false;
+    if (/^ {0,3}>/.test(l)) quoteCtx = true;
+    if (rawEnd) {
+      if (rawEnd.test(l)) { rawEnd = null; rawDone = true; }
+    } else {
+      if (HTML_BLOCK_START.test(l) || LINK_REF_DEF.test(l)) htmlCtx = true;
+      for (const [start, end] of RAW_HTML_BLOCKS) {
+        const m = start.exec(l);
+        if (m) { if (!end.test(l.slice(m[0].length))) rawEnd = end; break; }
+      }
+    }
+    if (!open && !listCtx && !quoteCtx && !htmlCtx && indented) continue;
     if (!open && !fenced[i + 1] && !startsOtherBlock(l) && isSetextH1(l, lines[i + 1])) { text[i] = true; under[i + 1] = true; i++; continue; }
     if (open && /^ {0,3}=+[ \t]*$/.test(l)) { open = false; continue; }
     open = !(/^ {0,3}#{1,6}(?:[ \t]|$)/.test(l) || /^ {0,3}(?:-+|([-*_])(?: *\1){2,})[ \t]*$/.test(l));
