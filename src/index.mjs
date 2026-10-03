@@ -539,6 +539,38 @@ function isSetextH1(line, next) {
   return isSetextText(line);
 }
 
+// Lines that open a block of their own in CommonMark, so they are never setext text after the
+// title: a thematic break, the start of an HTML block (an autolink such as <https://...> is not
+// one, it stays paragraph text) and a link reference definition. Only the later-H1 reading skips
+// them; the title reading keeps its Tek-560 predicate. QA 2 of Tek-564 measured "---", "<div>" and
+// "[a]: url" over a run of "=" warning as a second H1 although 0.3.18 passed them.
+function startsOtherBlock(line) {
+  return /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(line)
+    || /^ {0,3}<(?:[A-Za-z][A-Za-z0-9-]*(?:[\s\/>]|$)|\/[A-Za-z][A-Za-z0-9-]*(?:[\s>]|$)|!--|\?|![A-Za-z]|!\[CDATA\[)/.test(line)
+    || /^ {0,3}\[[^\]]+\]:/.test(line);
+}
+
+// Setext H1 lines after the title (Tek-564). A second H1 written as one text line over a run of "="
+// is out of place exactly like "# Second title" is, and ends the section before it the same way.
+// The text line is read by isSetextH1, the predicate the first-title reading uses. It must start
+// a paragraph: a line that follows other paragraph text, a list item or a blockquote without a
+// blank line is a continuation line, so a title over several lines is not read as a heading, and
+// text that starts with "#" is not an H1 (isSetextText). The underline is returned separately
+// because it is not a heading and not content.
+function laterSetextH1(lines, fenced) {
+  const text = new Array(lines.length).fill(false);
+  const under = new Array(lines.length).fill(false);
+  let open = false;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (fenced[i] || l.trim() === "") { open = false; continue; }
+    if (!open && !fenced[i + 1] && !startsOtherBlock(l) && isSetextH1(l, lines[i + 1])) { text[i] = true; under[i + 1] = true; i++; continue; }
+    if (open && /^ {0,3}=+[ \t]*$/.test(l)) { open = false; continue; }
+    open = !(/^ {0,3}#{1,6}(?:[ \t]|$)/.test(l) || /^ {0,3}(?:-+|([-*_])(?: *\1){2,})[ \t]*$/.test(l));
+  }
+  return { text, under };
+}
+
 // Which lines are H2 headings, outside fences. One reader for every place that asks "is this an
 // H2": the section count, the section membership and the place where the late-summary scan stops.
 // An ATX H2 is "##" followed by a space or a tab (a bare "##" is not one, and "###" is deeper). A
@@ -735,6 +767,7 @@ export function validateLlmsTxt(f) {
     }
   }
   const hm = h2Lines(lines, fenced);
+  const sx = laterSetextH1(lines, fenced);
   const h2Count = hm.h2.filter(Boolean).length;
   // A section counts when it carries a file list. An H2 followed by a paragraph satisfied
   // this check until 2026-08-29, and the format puts each section's links in a list.
@@ -758,9 +791,9 @@ export function validateLlmsTxt(f) {
         if (itemOpen) afterFence = true;
         continue;
       }
-      if (hm.under[i]) continue;
+      if (hm.under[i] || sx.under[i]) continue;
       if (hm.h2[i]) { inSection = true; counted = false; seenH2 = true; itemOpen = false; continue; }
-      const h1 = /^ {0,3}#(?:[ \t]|$)/.test(l);
+      const h1 = /^ {0,3}#(?:[ \t]|$)/.test(l) || sx.text[i];
       if (misplaced === -1 && i > firstIdx && (h1 || (!seenH2 && /^ {0,3}#{3,6}(?:[ \t]|$)/.test(l)))) misplaced = i;
       if (h1) { inSection = false; itemOpen = false; continue; }
       // A link on a line that continues an open list item counts as that item's link (Tek-560):

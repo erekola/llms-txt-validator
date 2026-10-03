@@ -137,10 +137,10 @@ For vulnerability reporting and supported versions, see [SECURITY.md](https://gi
 GitHub Actions publishes every version from 0.1.3 on with npm trusted publishing, and each one carries a provenance attestation. To check one, install it in an empty directory and ask npm to verify the signatures. Replace the version with the one you want to check.
 
 ```sh
-mkdir verify-llms && cd verify-llms && npm init -y && npm install turva-llms-txt-validator@0.3.18 --ignore-scripts && npm audit signatures
+mkdir verify-llms && cd verify-llms && npm init -y && npm install turva-llms-txt-validator@0.3.19 --ignore-scripts && npm audit signatures
 ```
 
-`npm audit signatures` checks the registry signature and the provenance attestation of each installed package that has one. The attestation of this package names three things to compare with what you expect: the repository `github.com/erekola/llms-txt-validator`, the workflow file `.github/workflows/publish.yml` and the commit that produced the tarball. The npm version page shows them under Provenance. Tag `v0.3.18` must point at that same commit, and `gh api repos/erekola/llms-txt-validator/commits/v0.3.17 --jq .sha` prints it. A mismatch is a reason not to use that version. Provenance proves where a release was built and from which commit. It does not prove that the code is safe, so reading the source and the dependencies stays your job.
+`npm audit signatures` checks the registry signature and the provenance attestation of each installed package that has one. The attestation of this package names three things to compare with what you expect: the repository `github.com/erekola/llms-txt-validator`, the workflow file `.github/workflows/publish.yml` and the commit that produced the tarball. The npm version page shows them under Provenance. Tag `v0.3.19` must point at that same commit, and `gh api repos/erekola/llms-txt-validator/commits/v0.3.19 --jq .sha` prints it. A mismatch is a reason not to use that version. Provenance proves where a release was built and from which commit. It does not prove that the code is safe, so reading the source and the dependencies stays your job.
 
 ## Hosted version and source
 

@@ -162,3 +162,75 @@ test("CLI: the target field under --json masks a user name, a password and a que
   assert.doesNotMatch(result.stdout, /supersecret|user:|abc/);
   assert.match(parsed.target, /nonexistent\.invalid\.test/);
 });
+
+// Tek-564 (outside re-check W36 to W44, V1): a second H1 written as a setext heading, one text
+// line over a run of "=", warns like "# Second title" does, with the same detail and the line of
+// the text. Before 0.3.19 only the "#" form was read after the title.
+const sectionsOf = (text) => validateLlmsTxt(good(text)).find((c) => c.id === "sections");
+const setextBetween = base.replace("## Docs", "Second title\n============\n\n## Docs");
+const atxBetween = base.replace("## Docs", "# Second title\n\n## Docs");
+const setextAfter = base + "\nSecond title\n============\n";
+const atxAfter = base + "\n# Second title\n";
+
+test("Tek-564: a setext second H1 between the title and the first H2 warns and names its text line", () => {
+  const s = sectionsOf(setextBetween);
+  assert.equal(s.status, "warn");
+  assert.match(s.detail, /heading at line 5 is out of place/);
+  assert.equal(summarizeChecks(validateLlmsTxt(good(setextBetween))), "valid with warnings");
+});
+
+test("Tek-564: a setext second H1 after the last section warns and names its text line", () => {
+  const s = sectionsOf(setextAfter);
+  assert.equal(s.status, "warn");
+  assert.match(s.detail, /heading at line 9 is out of place/);
+  assert.equal(summarizeChecks(validateLlmsTxt(good(setextAfter))), "valid with warnings");
+});
+
+test("Tek-564: the ATX and the setext form give the same check status and the same detail", () => {
+  for (const [atx, setext] of [[atxBetween, setextBetween], [atxAfter, setextAfter]]) {
+    const a = sectionsOf(atx);
+    const s = sectionsOf(setext);
+    assert.equal(s.status, a.status);
+    assert.equal(s.detail, a.detail);
+    assert.equal(a.status, "warn");
+  }
+});
+
+test("Tek-564: a setext second H1 ends the section before it, like an ATX one", () => {
+  const withList = base + "\nSecond title\n============\n\n- [More](https://example.com/more)\n";
+  assert.equal(sectionsOf(withList).detail.startsWith("1 section, 1 carrying a file list"), true);
+  const noList = "# Example\n\n> Summary.\n\n## Docs\n\nSecond title\n============\n\n- [Guide](https://example.com/guide)\n";
+  const atxNoList = "# Example\n\n> Summary.\n\n## Docs\n\n# Second title\n\n- [Guide](https://example.com/guide)\n";
+  assert.equal(sectionsOf(noList).detail, sectionsOf(atxNoList).detail);
+  assert.match(sectionsOf(noList).detail, /but no file list under any of them/);
+});
+
+test("Tek-564: the limits stay, a multi-line setext heading and setext text that starts with # are not an H1", () => {
+  for (const extra of ["Line one\nSecond title\n============\n", "#Second title\n============\n", "- item\nSecond title\n============\n", "> quote\nSecond title\n============\n"]) {
+    const s = sectionsOf(base + "\n" + extra);
+    assert.equal(s.status, "pass", extra);
+    assert.ok(!/out of place/.test(s.detail), extra);
+  }
+  // The underline alone is never a heading, and a fenced pair is code.
+  assert.equal(sectionsOf(base + "\n============\n").status, "pass");
+  assert.equal(sectionsOf(base + "\n```\nSecond title\n============\n```\n").status, "pass");
+  // A setext title is still the title, and nothing after it is out of place.
+  const setextTitle = "Example\n=======\n\n> Summary.\n\n## Docs\n\n- [Guide](https://example.com/guide)\n";
+  assert.equal(summarizeChecks(validateLlmsTxt(good(setextTitle))), "valid");
+});
+
+test("Tek-564: a second setext H1 right under a setext title, with no blank line, is out of place", () => {
+  const s = sectionsOf("Example\n=======\nSecond title\n============\n\n## Docs\n\n- [Guide](https://example.com/guide)\n");
+  assert.equal(s.status, "warn");
+  assert.match(s.detail, /heading at line 3 is out of place/);
+});
+
+test("Tek-564: a thematic break, an HTML block or a link reference definition over = is not a second H1", () => {
+  for (const extra of ["---\n============\n", "***\n============\n", "___\n============\n", "<div>\n============\n", "<!-- c -->\n============\n", "[a]: https://example.com/x\n============\n"]) {
+    const s = sectionsOf(base + "\n" + extra);
+    assert.equal(s.status, "pass", extra);
+    assert.ok(!/out of place/.test(s.detail), extra);
+  }
+  // An autolink is paragraph text, so an autolink line over a run of "=" is still a second H1.
+  assert.equal(sectionsOf(base + "\n<https://example.com/x>\n============\n").status, "warn");
+});

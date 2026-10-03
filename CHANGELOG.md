@@ -1,5 +1,20 @@
 # turva-llms-txt-validator changelog
 
+## 0.3.19 (2026-10-03)
+
+Two repairs from an outside re-check of 2026-10-03, tracked as Tek-564, made in the hosted validator first and
+mirrored here. The first one narrows which files pass the sections check. A file with a second H1 written as a
+setext heading, which was `valid` before, is now `valid with warnings`, and under `--strict` it exits 1.
+
+- A second H1 written as a line of text over a run of `=` is now out of place, like `# Second title`. It warns
+  between the title and the first H2 and after the last section, with the same detail and the line number of the
+  text line, and it ends the section before it. A heading over several lines and text that starts with `#`
+  are still not H1 headings, and the underline is never a heading or content. The new reading skips a thematic
+  break, the start of an HTML block and a link reference definition over a run of `=`.
+- The release check in the README named the tag of the previous release. It now names the tag of the version
+  you installed, and a new test requires every version the README names in a tag, commit or install form to
+  be the version in `package.json`.
+
 ## 0.3.18 (2026-10-03)
 
 One repair from an outside read of 2026-10-02, tracked as Tek-562, made in the hosted validator first and
