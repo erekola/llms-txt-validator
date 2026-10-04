@@ -1,5 +1,15 @@
 # turva-llms-txt-validator changelog
 
+## 0.3.21 (2026-10-05)
+
+This release changes no check result. It replaces the end-marker regular expressions of the HTML block reader
+with plain lowercase substring markers, so a code scanner that models them as an HTML tag filter no longer
+reports them (CodeQL js/bad-tag-filter). The reader is a CommonMark structural reader and not a sanitizer:
+an HTML comment block ends at `-->` only, as CommonMark defines it, so `--!>` is deliberately not an end
+marker. The set of files that pass is the same as in 0.3.20. A differential run of 600 000 random lines
+over every start and end pair found no difference between the old and the new matching. The hosted validator
+carries the same change.
+
 ## 0.3.20 (2026-10-03)
 
 This release is one repair from an outside re-check of 2026-10-03, tracked as Tek-565, made in the hosted

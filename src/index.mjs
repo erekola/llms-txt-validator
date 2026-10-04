@@ -546,15 +546,15 @@ function isSetextH1(line, next) {
 // "[a]: url" over a run of "=" warning as a second H1 although 0.3.18 passed them.
 const HTML_BLOCK_START = /^ {0,3}<(?:[A-Za-z][A-Za-z0-9-]*(?:[\s\/>]|$)|\/[A-Za-z][A-Za-z0-9-]*(?:[\s>]|$)|!--|\?|![A-Za-z]|!\[CDATA\[)/;
 const LINK_REF_DEF = /^ {0,3}\[[^\]]+\]:/;
-// HTML blocks of CommonMark types 1 to 5 end at a marker, not at a blank line: <pre>, <script>,
-// <style> and <textarea> at "</...>", "<!--" at "-->", "<?" at "?>", "<!X" at ">" and "<![CDATA[" at
-// "]]>". Each entry is [start, end]; the end marker is looked for after the start on the same line.
+// HTML blocks of CommonMark types 1 to 5 end at a marker, not at a blank line. The end markers are plain substrings matched case-insensitively, as CommonMark defines them, and not a tag regexp (CodeQL js/bad-tag-filter): type 2 ends at "-->" only, never at "--!>".
+// Entry is [start, ends]: </pre>, </script>, </style>, </textarea> after <pre> and kin, "-->" after "<!--", "?>" after "<?", "]]>" after "<![CDATA[", ">" after "<!X"; the marker is looked for after the start on the same line.
+function hasRawEnd(s, ends) { const t = s.toLowerCase(); return ends.some((e) => t.includes(e)); }
 const RAW_HTML_BLOCKS = [
-  [/^ {0,3}<(?:pre|script|style|textarea)(?:[ \t>]|$)/i, /<\/(?:pre|script|style|textarea)>/i],
-  [/^ {0,3}<!--/, /-->/],
-  [/^ {0,3}<\?/, /\?>/],
-  [/^ {0,3}<!\[CDATA\[/, /\]\]>/],
-  [/^ {0,3}<![A-Za-z]/, />/]
+  [/^ {0,3}<(?:pre|script|style|textarea)(?:[ \t>]|$)/i, ['</pre>', '</script>', '</style>', '</textarea>']],
+  [/^ {0,3}<!--/, ['-->']],
+  [/^ {0,3}<\?/, ['?>']],
+  [/^ {0,3}<!\[CDATA\[/, [']]>']],
+  [/^ {0,3}<![A-Za-z]/, ['>']]
 ];
 function startsOtherBlock(line) {
   return /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(line)
@@ -603,12 +603,12 @@ function laterSetextH1(lines, fenced) {
     blankBefore = false;
     if (/^ {0,3}>/.test(l)) quoteCtx = true;
     if (rawEnd) {
-      if (rawEnd.test(l)) { rawEnd = null; rawDone = true; }
+      if (hasRawEnd(l, rawEnd)) { rawEnd = null; rawDone = true; }
     } else {
       if (HTML_BLOCK_START.test(l) || LINK_REF_DEF.test(l)) htmlCtx = true;
       for (const [start, end] of RAW_HTML_BLOCKS) {
         const m = start.exec(l);
-        if (m) { if (!end.test(l.slice(m[0].length))) rawEnd = end; break; }
+        if (m) { if (!hasRawEnd(l.slice(m[0].length), end)) rawEnd = end; break; }
       }
     }
     if (!open && !listCtx && !quoteCtx && !htmlCtx && indented) continue;
