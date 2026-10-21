@@ -1,5 +1,9 @@
 # turva-llms-txt-validator changelog
 
+## 0.4.2 (2026-10-21)
+
+The README is rewritten for the TypeScript package. It documents `validateHost` and its result types with a TypeScript example, and it adds sections on the release process and on local development. The sample output is the command-line output of a run on 2026-10-21. No code changed. The compiled files are the same as in 0.4.1.
+
 ## 0.4.1 (2026-10-21)
 
 Two inputs that neither `fetchLlmsTxt` nor `validateHost` produces no longer leave `undefined` in a
