@@ -750,8 +750,10 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
   }
   // An accepted redirect is shown masked as well (round 19, K7-2, mirrored from worker.js
   // v3.164.0): a query value or a fragment in a same-host Location used to reach this
-  // detail as sent.
-  add("http-status", "pass", "File exists at /llms.txt", f.redirectedFrom ? "HTTP 200, followed a redirect from " + maskLocation(f.redirectedFrom) + " to " + maskLocation(f.finalUrl!) : "HTTP 200");
+  // detail as sent. An input with redirectedFrom and no finalUrl, which fetchLlmsTxt never returns but a
+  // caller of this function can pass, names the address it was redirected from alone instead of ending
+  // in "to undefined" (Tek-668, NULL-2, mirrored from worker.ts).
+  add("http-status", "pass", "File exists at /llms.txt", f.redirectedFrom ? "HTTP 200, followed a redirect from " + maskLocation(f.redirectedFrom) + (f.finalUrl ? " to " + maskLocation(f.finalUrl) : "") : "HTTP 200");
   // A leading byte-order mark is stripped the same way the fetch path already strips it: the
   // TextDecoder used there removes a BOM by default, so the direct API took a different
   // document than the fetched one for the exact same bytes until this was measured (outside
@@ -1866,12 +1868,14 @@ export function findLinkRelations(html: string, linkHeader: string): LinkRelatio
   return found;
 }
 
-export function validateV2Discovery(found: LinkRelations | null, unreadReason?: string): LlmsCheck[] {
+// A caller that passes null without a reason gets a neutral one instead of an undefined detail (Tek-668,
+// NULL-1, mirrored from worker.ts); validateHost always passes its own.
+export function validateV2Discovery(found: LinkRelations | null, unreadReason: string = "the home page was not read, so this was not measured"): LlmsCheck[] {
   const checks: LlmsCheck[] = [];
   const add = (id: string, status: CheckStatus, label: string, detail: string) => checks.push({ id, status, label, detail });
   if (!found) {
-    add("v2-describedby", "info", "Home page points to its llms.txt (v2)", unreadReason!);
-    add("v2-markdown-alternate", "info", "Home page points to a markdown version (v2)", unreadReason!);
+    add("v2-describedby", "info", "Home page points to its llms.txt (v2)", unreadReason);
+    add("v2-markdown-alternate", "info", "Home page points to a markdown version (v2)", unreadReason);
     return checks;
   }
   // A target is shown through maskLocation, as a redirect target is, so a user name, a password,

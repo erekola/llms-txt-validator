@@ -1,5 +1,15 @@
 # turva-llms-txt-validator changelog
 
+## 0.4.1 (2026-10-21)
+
+Two inputs that neither `fetchLlmsTxt` nor `validateHost` produces no longer leave `undefined` in a
+check's detail. With no reason given, `validateV2Discovery` called with null now gives both v2 checks
+the detail "the home page was not read, so this was not measured". Given a `redirectedFrom` without a
+`finalUrl`, `validateLlmsTxt` now reports "HTTP 200, followed a redirect from" and the masked address it
+was redirected from, where it used to end in "to undefined". Results for what `fetchLlmsTxt` and
+`validateHost` return do not change, because `fetchLlmsTxt` always sets both fields and `validateHost`
+always passes a reason. The hosted validator carries the same change. Two new tests cover the two inputs.
+
 ## 0.4.0 (2026-10-21)
 
 The source is now TypeScript, compiled with tsc to dist/, and the package ships its type declarations.

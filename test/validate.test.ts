@@ -690,6 +690,23 @@ test("a same-host redirect with a query and a fragment is masked once accepted (
   } finally { globalThis.fetch = orig; }
 });
 
+test("NULL-2 (Tek-668): a redirect with no finalUrl names the address it was redirected from alone, not \"to undefined\"", () => {
+  const text = "# Example\n\n> One line.\n\n## Docs\n\n- [Guide](https://example.com/guide)\n";
+  const http = byId(validateLlmsTxt(good(text, { redirectedFrom: "https://example.com/llms.txt" })), "http-status");
+  assert.equal(http.status, "pass");
+  assert.equal(http.detail, "HTTP 200, followed a redirect from https://example.com/llms.txt");
+});
+
+test("NULL-1 (Tek-668): validateV2Discovery(null) without a reason says the home page was not read", () => {
+  const checks = validateV2Discovery(null);
+  assert.equal(checks.length, 2);
+  for (const c of checks) {
+    assert.equal(c.status, "info");
+    assert.equal(c.detail, "the home page was not read, so this was not measured");
+  }
+  for (const c of validateV2Discovery(null, "given reason")) assert.equal(c.detail, "given reason");
+});
+
 test("stripBidi removes bidi controls and leaves ordinary text alone", () => {
   assert.equal(stripBidi("plain text"), "plain text");
   assert.equal(stripBidi("a\u202Eb\u2066c\u2069d"), "abcd");
