@@ -4,7 +4,7 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.3.x   | :white_check_mark: |
+| 0.4.x   | :white_check_mark: |
 
 Fixes ship as a new release rather than as a patch to an older one, so the
 latest published version is the supported one.
@@ -21,6 +21,9 @@ version. No npm token is stored in this repository.
 
 There are no runtime dependencies. The module reads its own package.json for
 the version string and calls fetch, and nothing else.
+
+The published JavaScript in dist/ is compiled from the TypeScript source by the publish
+workflow, so the provenance attestation binds the tarball to that build.
 
 ## What the validator fetches
 

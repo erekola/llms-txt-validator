@@ -1,11 +1,12 @@
 # Third-party notices
 
 This package's own license is MIT, in `LICENSE`. The named character reference
-table in `src/index.mjs` (`NAMED_REFERENCE_DATA`) is generated from data
-published by a third-party package and carries that package's own license
-below. This is a build-time data source, not an installed runtime dependency:
-the table is generated once and copied into `src/index.mjs`, so no reference
-to it appears in `package.json` or in the dependency tree an installer sees.
+table `NAMED_REFERENCE_DATA` in `src/index.ts` is generated from data published
+by a third-party package and carries that package's own license below. It is
+compiled into `dist/src/index.js` with the rest of the source. This is a
+build-time data source, not an installed runtime dependency: the table is
+generated once and copied into `src/index.ts`, so no reference to it appears in
+`package.json` or in the dependency tree an installer sees.
 
 ## character-entities
 

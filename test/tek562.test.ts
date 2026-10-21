@@ -1,16 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateLlmsTxt, summarizeChecks } from "../src/index.mjs";
+import { validateLlmsTxt, summarizeChecks } from "../src/index.js";
 
 // Regression tests for 0.3.18 (Tek-562, outside review W30, 2026-10-02). An H2 is "##" followed by a
 // space or a tab, or one line of paragraph text underlined with hyphens. The hosted validator carries
 // the same cases in the turva-worker repo. Each positive case gave a "no H2 sections found" warning
 // in 0.3.17, and the guards say what still is not an H2.
 
-const good = (text) => ({ status: 200, contentType: "text/plain; charset=utf-8", text, bytes: Buffer.byteLength(text), truncated: false });
-const run = (text) => validateLlmsTxt(good(text));
-const status = (text, id) => run(text).find((c) => c.id === id).status;
-const detail = (text, id) => run(text).find((c) => c.id === id).detail;
+const good = (text: string) => ({ status: 200, contentType: "text/plain; charset=utf-8", text, bytes: Buffer.byteLength(text), truncated: false });
+const run = (text: string) => validateLlmsTxt(good(text));
+const status = (text: string, id: string) => run(text).find((c) => c.id === id)!.status;
+const detail = (text: string, id: string) => run(text).find((c) => c.id === id)!.detail;
 
 const head = "# Test\n\n> Summary\n\n";
 const link = "- [Guide](https://turva.dev/guides/llms-txt)\n";

@@ -1,5 +1,21 @@
 # turva-llms-txt-validator changelog
 
+## 0.4.0 (2026-10-21)
+
+The source is now TypeScript, compiled with tsc to dist/, and the package ships its type declarations.
+Behind the same `exports` name, the entry point moved to dist/src/index.js. The `llms-txt-validate`
+command keeps its flags, its output and its exit codes, and Node.js 22 stays the minimum.
+
+No check logic changed. Compiled dist/src/index.js has the same 12 493 JavaScript tokens as
+src/index.mjs in 0.3.21, except the relative path to package.json, which is one directory deeper. The
+CLI differs in the same path and in its import of the library. A differential run compared 0.3.21
+with 0.4.0 on 4 160 000 generated llms.txt inputs, 832 000 HTML heads with Link headers, 29 120
+stubbed fetch scenarios for each of the two network functions and 445 CLI runs, and found no
+difference. The same comparison caught both changes planted in copies as a control.
+
+A new test, test/no-javascript.test.ts, fails if a .js, .mjs or .cjs file appears outside node_modules,
+dist and .git.
+
 ## 0.3.21 (2026-10-05)
 
 This release changes no check result. It replaces the end-marker regular expressions of the HTML block reader

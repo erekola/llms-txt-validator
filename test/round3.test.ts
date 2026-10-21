@@ -6,10 +6,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { validateLlmsTxt, summarizeChecks, validateHost, maskLocation } from "../src/index.mjs";
+import { validateLlmsTxt, summarizeChecks, validateHost, maskLocation } from "../src/index.js";
+import type { FetchedLlmsTxt, LlmsCheck } from "../src/index.js";
 
-const good = (text, extra = {}) => ({ status: 200, contentType: "text/plain; charset=utf-8", text, bytes: Buffer.byteLength(text), truncated: false, ...extra });
-const byId = (checks, id) => checks.find((c) => c.id === id);
+const good = (text: string, extra: Partial<FetchedLlmsTxt> = {}) => ({ status: 200, contentType: "text/plain; charset=utf-8", text, bytes: Buffer.byteLength(text), truncated: false, ...extra });
+const byId = (checks: LlmsCheck[], id: string): LlmsCheck => checks.find((c) => c.id === id)!;
 const prefix = "# Example\n\n> Summary\n\n## Docs\n\n";
 
 // --- V03-VN1: maskLocation must mask userinfo even when the scheme is not recognised, as long
@@ -36,7 +37,7 @@ test("VN1: maskLocation masks an unrecognised-scheme userinfo when an @ precedes
 
 test("VN1: the CLI target field masks the same underscore-username case", () => {
   const res = spawnSync(process.execPath, [
-    "bin/cli.mjs",
+    "dist/bin/cli.js",
     "AUDIT_USER:AUDIT_SECRET_64923@example.com/?token=TOPSECRET#FRAGMENTSECRET", "--json"
   ]);
   const out = JSON.parse(res.stdout.toString());
@@ -64,13 +65,13 @@ test("V13 D5-1: a slashless user:password@host is masked, path@2x.png is not", (
 
 test("V13 D5-1: the CLI --json target never carries the password of a slashless user:password@host", () => {
   for (const input of ["user_name:demo-secret@example.com", "a_b:pw@example.com", "1user:pw@example.com", "user_name:pw@host?x=1"]) {
-    const res = spawnSync(process.execPath, ["bin/cli.mjs", input, "--json"]);
+    const res = spawnSync(process.execPath, ["dist/bin/cli.js", input, "--json"]);
     assert.equal(res.status, 2, input);
     const out = JSON.parse(res.stdout.toString());
     assert.ok(typeof out.target === "string" && out.target.startsWith("***@"), input + " -> " + out.target);
     assert.doesNotMatch(res.stdout.toString(), /demo-secret|pw/, input);
   }
-  const plain = JSON.parse(spawnSync(process.execPath, ["bin/cli.mjs", "path@2x.png", "--json"]).stdout.toString());
+  const plain = JSON.parse(spawnSync(process.execPath, ["dist/bin/cli.js", "path@2x.png", "--json"]).stdout.toString());
   assert.equal(plain.target, "path@2x.png");
 });
 
@@ -178,10 +179,10 @@ test("V10-P3-01: the input-path check's value and detail are separate fields", a
   );
   try {
     const typed = await validateHost("https://ex.com/docs/llms.txt?key=secret");
-    assert.equal(typed.checks[0].id, "input-path");
-    assert.equal(typed.checks[0].value, "/docs/llms.txt");
+    assert.equal(typed.checks[0]!.id, "input-path");
+    assert.equal(typed.checks[0]!.value, "/docs/llms.txt");
     assert.equal(
-      typed.checks[0].detail,
+      typed.checks[0]!.detail,
       "This path is not used, because the validator always reads /llms.txt at the root of the host."
     );
   } finally { globalThis.fetch = orig; }

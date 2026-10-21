@@ -7,7 +7,12 @@
 // curl -H "Accept: application/json" "https://turva.dev/llms-txt-validator?url=example.com"
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { validateHost, stripControls, maskLocation } from "../src/index.mjs";
+import { validateHost, stripControls, maskLocation } from "../src/index.js";
+import type { CheckStatus } from "../src/index.js";
+
+// The shape of what a catch block may hold. Node errors carry a message, an errno-style code and,
+// for a failed fetch, the real cause one level down.
+type Caught = { message?: string; code?: unknown; cause?: { code?: unknown } };
 
 const USAGE = [
   "usage: llms-txt-validate <domain-or-url> [--json] [--strict]",
@@ -27,7 +32,7 @@ const json = args.includes("--json");
 const flags = args.filter((a) => a.startsWith("-") && a !== "-");
 const targets = args.filter((a) => !(a.startsWith("-") && a !== "-"));
 
-function fail(message) {
+function fail(message: string): never {
   if (json) console.log(JSON.stringify({ error: message }, null, 2));
   else {
     console.error("error: " + message);
@@ -44,19 +49,19 @@ if (flags.includes("--version") || flags.includes("-V")) {
   // Read package.json relative to this file, not the caller's cwd, so this works the same
   // whether the CLI runs installed, linked or through npx (V-04, outside audit 2026-09-26).
   // No network read: the version is the one actually installed, not the npm registry's latest.
-  const pkgUrl = new URL("../package.json", import.meta.url);
+  const pkgUrl = new URL("../../package.json", import.meta.url);
   const pkg = JSON.parse(readFileSync(fileURLToPath(pkgUrl), "utf8"));
   console.log(pkg.version);
   process.exit(0);
 }
 const unknown = flags.find((f) => !KNOWN.has(f));
 if (unknown) fail("unknown option " + JSON.stringify(stripControls(unknown).slice(0, 40)));
-if (targets.length === 0 || targets[0].trim() === "") fail("no domain or URL given");
+if (targets.length === 0 || targets[0]!.trim() === "") fail("no domain or URL given");
 if (targets.length > 1) fail("one domain or URL at a time, got " + targets.length);
 
-const mark = { pass: "ok  ", warn: "warn", fail: "FAIL", info: "info" };
+const mark: Record<CheckStatus, string> = { pass: "ok  ", warn: "warn", fail: "FAIL", info: "info" };
 try {
-  const result = await validateHost(targets[0]);
+  const result = await validateHost(targets[0]!);
   if (json) {
     console.log(JSON.stringify(result, null, 2));
   } else {
@@ -73,7 +78,7 @@ try {
   if (result.summary === "valid with warnings" && flags.includes("--strict")) process.exit(1);
   process.exit(0);
 } catch (err) {
-  const message = stripControls(err && err.message ? err.message : String(err));
+  const message = stripControls(err && (err as Caught).message ? (err as Caught).message : String(err));
   // The hosted validator answers every failure as JSON when JSON was asked for, so a CI
   // step that parses --json output gets {"error": ...} here too instead of an empty stdout
   // and a plain-text stderr (round 16 S3-3). The exit code is unchanged.
@@ -85,9 +90,9 @@ try {
   // err.code for an error that sets it directly; it is omitted, not null, when neither is set.
   // target goes through maskLocation like every other address the tool prints, so a user name,
   // a password or a query value typed into the command line is never echoed back.
-  const code = (err && err.cause && err.cause.code) || (err && err.code);
+  const code = (err && (err as Caught).cause && (err as Caught).cause!.code) || (err && (err as Caught).code);
   if (json) {
-    const report = { error: message, target: stripControls(maskLocation(targets[0])) };
+    const report: { error: string; target: string; code?: string } = { error: message, target: stripControls(maskLocation(targets[0]!)) };
     if (code) report.code = stripControls(String(code));
     console.log(JSON.stringify(report, null, 2));
   } else console.error("error: " + message);

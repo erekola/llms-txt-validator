@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { validateLlmsTxt, summarizeChecks, validateHost, findLinkRelations, isValidPublicHost } from "../src/index.mjs";
+import { validateLlmsTxt, summarizeChecks, validateHost, findLinkRelations, isValidPublicHost } from "../src/index.js";
+import type { LlmsCheck } from "../src/index.js";
 
 // Regression tests for 0.3.8 (Tek-496, outside audit 2026-09-26). The package mirrors the hosted
 // validator at turva.dev/llms-txt-validator, whose worker.js carries the same cases in
@@ -12,9 +13,9 @@ import { validateLlmsTxt, summarizeChecks, validateHost, findLinkRelations, isVa
 const BS = String.fromCharCode(92);
 const ESC = String.fromCharCode(27);
 const base = "# Example\n\n> Summary.\n\n## Docs\n\n- [Guide](https://example.com/guide)\n";
-const good = (text, contentType = "text/plain; charset=utf-8") => ({ status: 200, contentType, text, bytes: Buffer.byteLength(text), truncated: false });
-const status = (checks, id) => checks.find((c) => c.id === id).status;
-const cli = fileURLToPath(new URL("../bin/cli.mjs", import.meta.url));
+const good = (text: string, contentType = "text/plain; charset=utf-8") => ({ status: 200, contentType, text, bytes: Buffer.byteLength(text), truncated: false });
+const status = (checks: LlmsCheck[], id: string) => checks.find((c) => c.id === id)!.status;
+const cli = fileURLToPath(new URL("../bin/cli.js", import.meta.url));
 
 test("H1: whitespace after the marker is allowed, a heading with no text is not", () => {
   for (const t of ["#  Example", "#\tExample", "# Example #", "   # Example"]) {
@@ -23,7 +24,7 @@ test("H1: whitespace after the marker is allowed, a heading with no text is not"
   for (const t of ["# ###", "#", "#   #  "]) {
     const checks = validateLlmsTxt(good(base.replace("# Example", t)));
     assert.equal(status(checks, "h1-title"), "fail", t);
-    assert.match(checks.find((c) => c.id === "h1-title").detail, /has no text/, t);
+    assert.match(checks.find((c) => c.id === "h1-title")!.detail, /has no text/, t);
   }
 });
 
@@ -42,15 +43,15 @@ test("links: an ordered list, a tab, a title and an angle target are links", () 
 
 test("links: one line ending may stand around the destination, a blank line may not", () => {
   const wrapped = validateLlmsTxt(good(base + "\nSee [the guide](https://example.com/guide\n) and [more](\nhttps://example.com/more).\n"));
-  assert.match(wrapped.find((c) => c.id === "links").detail, /^3 links, all absolute URLs/);
+  assert.match(wrapped.find((c) => c.id === "links")!.detail, /^3 links, all absolute URLs/);
   const broken = validateLlmsTxt(good(base + "\nSee [the guide](\n\nhttps://example.com/guide).\n"));
-  assert.match(broken.find((c) => c.id === "links").detail, /^1 link, all absolute URLs/);
+  assert.match(broken.find((c) => c.id === "links")!.detail, /^1 link, all absolute URLs/);
 });
 
 test("structure: a heading before the first H2 or a second H1 warns", () => {
   const checks = validateLlmsTxt(good(base.replace("## Docs", "### Extra heading\n\n## Docs")));
   assert.equal(status(checks, "sections"), "warn");
-  assert.match(checks.find((c) => c.id === "sections").detail, /heading at line 5 is out of place/);
+  assert.match(checks.find((c) => c.id === "sections")!.detail, /heading at line 5 is out of place/);
   assert.equal(status(validateLlmsTxt(good(base + "\n# Another\n")), "sections"), "warn");
   assert.equal(status(validateLlmsTxt(good(base + "\n### Sub\n\n- [B](https://example.com/b)\n")), "sections"), "pass");
 });
@@ -76,7 +77,7 @@ test("host: localhost.localdomain is not a public host", () => {
 test("input error: a user name, a password or a query value never reaches the message", async () => {
   const marker = "m" + Math.random().toString(36).slice(2);
   for (const input of ["https://u:" + marker + "@example.com/?token=" + marker, "https://127.0.0.1/?k=" + marker, "localhost#" + marker]) {
-    await assert.rejects(validateHost(input), (err) => !err.message.includes(marker) && /not a public domain name/.test(err.message), input);
+    await assert.rejects(validateHost(input), (err: Error) => !err.message.includes(marker) && /not a public domain name/.test(err.message), input);
   }
   await assert.rejects(validateHost("bad host"), /not a public domain name: bad host/);
 });
@@ -105,7 +106,7 @@ test("discovery: a head read in part says so", () => {
 });
 
 test("CLI: an unknown option, a second target and a missing target stop with exit 2, as JSON under --json", () => {
-  const run = (...args) => spawnSync(process.execPath, [cli, ...args], { encoding: "utf8" });
+  const run = (...args: string[]) => spawnSync(process.execPath, [cli, ...args], { encoding: "utf8" });
   const typo = run("example.com", "--strcit", "--json");
   assert.equal(typo.status, 2);
   assert.match(JSON.parse(typo.stdout).error, /unknown option/);
@@ -121,8 +122,8 @@ test("CLI: an unknown option, a second target and a missing target stop with exi
 });
 
 test("CLI: --version and -V print the installed version and exit 0 (V-04)", () => {
-  const pkg = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"));
-  const run = (...args) => spawnSync(process.execPath, [cli, ...args], { encoding: "utf8" });
+  const pkg = JSON.parse(readFileSync(fileURLToPath(new URL("../../package.json", import.meta.url)), "utf8"));
+  const run = (...args: string[]) => spawnSync(process.execPath, [cli, ...args], { encoding: "utf8" });
   for (const flag of ["--version", "-V"]) {
     const result = run(flag);
     assert.equal(result.status, 0, flag);
@@ -137,7 +138,7 @@ test("CLI: --version and -V print the installed version and exit 0 (V-04)", () =
 test("CLI: a network error under --json carries target and code, error unchanged (V-05)", () => {
   // A stubbed fetch stands in for a real DNS failure: it is deterministic and does not wait
   // out the real 8 second fetch timeout the way an actual unreachable host would.
-  const mock = new URL("fixtures/mock-network-error.mjs", import.meta.url).href;
+  const mock = new URL("fixtures/mock-network-error.js", import.meta.url).href;
   const result = spawnSync(process.execPath, ["--import", mock, cli, "example.com", "--json"], { encoding: "utf8" });
   assert.equal(result.status, 2);
   const parsed = JSON.parse(result.stdout);
@@ -166,7 +167,7 @@ test("CLI: the target field under --json masks a user name, a password and a que
 // Tek-564 (outside re-check W36 to W44, V1): a second H1 written as a setext heading, one text
 // line over a run of "=", warns like "# Second title" does, with the same detail and the line of
 // the text. Before 0.3.19 only the "#" form was read after the title.
-const sectionsOf = (text) => validateLlmsTxt(good(text)).find((c) => c.id === "sections");
+const sectionsOf = (text: string): LlmsCheck => validateLlmsTxt(good(text)).find((c) => c.id === "sections")!;
 const setextBetween = base.replace("## Docs", "Second title\n============\n\n## Docs");
 const atxBetween = base.replace("## Docs", "# Second title\n\n## Docs");
 const setextAfter = base + "\nSecond title\n============\n";
@@ -187,7 +188,7 @@ test("Tek-564: a setext second H1 after the last section warns and names its tex
 });
 
 test("Tek-564: the ATX and the setext form give the same check status and the same detail", () => {
-  for (const [atx, setext] of [[atxBetween, setextBetween], [atxAfter, setextAfter]]) {
+  for (const [atx, setext] of [[atxBetween, setextBetween], [atxAfter, setextAfter]] as [string, string][]) {
     const a = sectionsOf(atx);
     const s = sectionsOf(setext);
     assert.equal(s.status, a.status);
@@ -238,7 +239,7 @@ test("Tek-564: a thematic break, an HTML block or a link reference definition ov
 // Tek-565 (outside review W46): a four-space line that does not continue a paragraph is indented
 // code, so the next unindented "Title" over "===" is a second H1 even after it. The six fixtures
 // are the W46 cases, with the line of the text each must name.
-const w46 = {
+const w46: Record<string, [string, number]> = {
   f1: ["# Site\n\n> Summary\n\nSecond title\n===\n\n## Docs\n- [Doc](https://turva.dev)\n", 5],
   f2: ["# Site\n\n> Summary\n\n    code\nSecond title\n===\n\n## Docs\n- [Doc](https://turva.dev)\n", 6],
   f3: ["# Site\n\n> Summary\n\n    code\n# Second title\n\n## Docs\n- [Doc](https://turva.dev)\n", 6],
@@ -283,11 +284,11 @@ test("Tek-565: a four-space line inside a paragraph or a list item is not indent
 });
 
 test("CLI: --strict exits 1 for a second H1 after an indented code line and 0 for a clean file (Tek-565)", () => {
-  const mock = new URL("fixtures/mock-llms-txt.mjs", import.meta.url).href;
-  const run = (body, ...flags) => spawnSync(process.execPath, ["--import", mock, cli, "example.com", ...flags], { encoding: "utf8", env: { ...process.env, LLMS_TXT_BODY: body } });
+  const mock = new URL("fixtures/mock-llms-txt.js", import.meta.url).href;
+  const run = (body: string, ...flags: string[]) => spawnSync(process.execPath, ["--import", mock, cli, "example.com", ...flags], { encoding: "utf8", env: { ...process.env, LLMS_TXT_BODY: body } });
   for (const name of ["f2", "f5"]) {
-    assert.equal(run(w46[name][0], "--strict").status, 1, name);
-    assert.equal(run(w46[name][0]).status, 0, name);
+    assert.equal(run(w46[name]![0], "--strict").status, 1, name);
+    assert.equal(run(w46[name]![0]).status, 0, name);
   }
   const para = "# Site\n\n> Summary\n\nPara text\n    continued\nTitle\n===\n\n## Docs\n- [Doc](https://turva.dev)\n";
   assert.equal(run(para, "--strict").status, 0);

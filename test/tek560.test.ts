@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateLlmsTxt, summarizeChecks, findLinkRelations, maskLocation } from "../src/index.mjs";
+import { validateLlmsTxt, summarizeChecks, findLinkRelations, maskLocation } from "../src/index.js";
 
 // Regression tests for 0.3.16 (Tek-560, outside review 2026-10-02, items V01 to V04, V06, V07, V08
 // and V10). The hosted validator carries the same cases in test/validator-tek560.test.mjs in the
@@ -9,10 +9,10 @@ import { validateLlmsTxt, summarizeChecks, findLinkRelations, maskLocation } fro
 
 const BS = String.fromCharCode(92);
 const base = "# Example\n\n> Summary.\n\n## Docs\n\n- [Guide](https://example.com/guide)\n";
-const good = (text) => ({ status: 200, contentType: "text/plain; charset=utf-8", text, bytes: Buffer.byteLength(text), truncated: false });
-const run = (text) => validateLlmsTxt(good(text));
-const status = (text, id) => run(text).find((c) => c.id === id).status;
-const detail = (text, id) => run(text).find((c) => c.id === id).detail;
+const good = (text: string) => ({ status: 200, contentType: "text/plain; charset=utf-8", text, bytes: Buffer.byteLength(text), truncated: false });
+const run = (text: string) => validateLlmsTxt(good(text));
+const status = (text: string, id: string) => run(text).find((c) => c.id === id)!.status;
+const detail = (text: string, id: string) => run(text).find((c) => c.id === id)!.detail;
 
 test("V01: a link label cannot cross a blank line", () => {
   const split = base.replace("[Guide](", "[Gu\n\nide](");
@@ -40,8 +40,8 @@ test("V03: CR-only and CRLF line endings read like LF", () => {
   assert.equal(summarizeChecks(run(base.replace(/\n/g, "\r"))), "valid");
   assert.equal(summarizeChecks(run(base.replace(/\n/g, "\r\n"))), "valid");
   const cr = run(base.replace(/\n/g, "\r"));
-  assert.match(cr.find((c) => c.id === "h1-title").detail, /Example/);
-  assert.doesNotMatch(cr.find((c) => c.id === "h1-title").detail, /Summary/);
+  assert.match(cr.find((c) => c.id === "h1-title")!.detail, /Example/);
+  assert.doesNotMatch(cr.find((c) => c.id === "h1-title")!.detail, /Summary/);
 });
 
 test("V04A: a setext H1 is an H1, and the summary is read after its underline", () => {
@@ -73,7 +73,7 @@ test("V04B: a link on a continuation line counts as the list item's link", () =>
 });
 
 test("V06: the HTML check needs a real tag", () => {
-  const add = (t) => base + "\n" + t + "\n";
+  const add = (t: string) => base + "\n" + t + "\n";
   for (const t of ["For the calculation, a <b + c.", "if n <b1 + 2", "a <b + c > d", "x <3 and 2> y", "<https://example.com>", "<mailto:a@example.com>", "a < b and c > d"]) {
     assert.equal(status(add(t), "no-html"), "pass", t);
   }
@@ -94,7 +94,7 @@ test("V07: a template marker inside a comment or a raw text element does not cou
 
 test("V07: the template scan stays linear on hostile input", () => {
   // Both sizes stay under the 65,536 character head read, so the larger one is not cut before the scan.
-  const time = (s) => { const t = performance.now(); findLinkRelations("<head><template>" + s, ""); return performance.now() - t; };
+  const time = (s: string) => { const t = performance.now(); findLinkRelations("<head><template>" + s, ""); return performance.now() - t; };
   for (const unit of ["</templateX", "<template>", "<style>", "<!--", "<template><style>"]) {
     const n = Math.floor(14000 / unit.length);
     time(unit.repeat(n));
@@ -128,7 +128,7 @@ test("V10: an empty blockquote is not a summary", () => {
 });
 
 test("F1: a blockquote block is the summary when any of its lines has text", () => {
-  const withQuote = (q) => base.replace("> Summary.", q);
+  const withQuote = (q: string) => base.replace("> Summary.", q);
   for (const q of [">\n> Real summary", "> \n> Real summary", ">\n>\n> Real summary", "  >\n  > Real summary", "> Real summary\n>"]) {
     assert.equal(status(withQuote(q), "summary"), "pass", JSON.stringify(q));
     assert.match(detail(withQuote(q), "summary"), /Real summary/, JSON.stringify(q));
@@ -145,7 +145,7 @@ test("F1: a blockquote block is the summary when any of its lines has text", () 
 });
 
 test("F2: an empty list marker takes only an indented continuation, and a fence closes the item", () => {
-  const item = (t) => base.replace("- [Guide](https://example.com/guide)", t);
+  const item = (t: string) => base.replace("- [Guide](https://example.com/guide)", t);
   for (const t of ["-\n  [Guide](https://example.com/guide)", "-\n\t[Guide](https://example.com/guide)", "- Read\n[Guide](https://example.com/guide)", "- Read\nthe [Guide](https://example.com/guide)", "-\n  Read the\n[Guide](https://example.com/guide)"]) {
     assert.equal(status(item(t), "sections"), "pass", JSON.stringify(t));
   }
@@ -159,7 +159,7 @@ test("F2: an empty list marker takes only an indented continuation, and a fence 
 });
 
 test("F3: the HTML check reads any non-space attribute name", () => {
-  const add = (t) => base + "\n" + t + "\n";
+  const add = (t: string) => base + "\n" + t + "\n";
   for (const t of ["<div @click=\"x\">", "<div *ngIf=\"x\">", "<div class=a\"b\">", "<div class=a'b'>", "<div :class=\"x\" #slot>", "<div v-on:click.prevent=\"x\">", "<a title=\"1 > 2\">", "<input disabled>"]) {
     assert.equal(status(add(t), "no-html"), "warn", t);
   }
@@ -169,7 +169,7 @@ test("F3: the HTML check reads any non-space attribute name", () => {
   // A tag still open at the end of the file has no closing bracket and does not warn.
   assert.equal(status(base + "\n<div class=\"x\"", "no-html"), "pass");
   // The scan stays linear on a long run of attributes with no closing bracket.
-  const time = (s) => { const t = performance.now(); status(base + "\n" + s, "no-html"); return performance.now() - t; };
+  const time = (s: string) => { const t = performance.now(); status(base + "\n" + s, "no-html"); return performance.now() - t; };
   for (const unit of ["<a b ", "<a b=\"x\" c='y ", "<a @b=x\"y\" ", "<a +++ ", "<a b=\"<a b='"]) {
     time(unit.repeat(2000));
     const small = time(unit.repeat(10000));
@@ -189,14 +189,14 @@ test("V08: maskLocation output is unchanged for repeated keys and fast on 32000 
 });
 
 test("V-1: the HTML check reads a Unicode letter or digit in an attribute name", () => {
-  const add = (t) => base + "\n" + t + "\n";
+  const add = (t: string) => base + "\n" + t + "\n";
   for (const t of ["<p ä=\"x\">", "<p data-ñ=1>", "<p é>", "<p ٣=\"x\">", "<p 名前=\"x\">"]) {
     assert.equal(status(add(t), "no-html"), "warn", t);
   }
   for (const t of ["a <b + c > d", "a <b ! ? > d", "a <é> b"]) {
     assert.equal(status(add(t), "no-html"), "pass", t);
   }
-  const time = (s) => { const t = performance.now(); status(base + "\n" + s, "no-html"); return performance.now() - t; };
+  const time = (s: string) => { const t = performance.now(); status(base + "\n" + s, "no-html"); return performance.now() - t; };
   for (const unit of ["<a ä ", "<a ä=\"x\" c='y ", "<a @ä=x\"y\" ", "<a ", "<a b=\"<a b='"]) {
     time(unit.repeat(2000));
     const small = time(unit.repeat(10000));
@@ -206,7 +206,7 @@ test("V-1: the HTML check reads a Unicode letter or digit in an attribute name",
 });
 
 test("V-2: the line after a fence needs the item's content column, and the column is the real content start", () => {
-  const item = (t) => base.replace("- [Guide](https://example.com/guide)", t);
+  const item = (t: string) => base.replace("- [Guide](https://example.com/guide)", t);
   const link = "[Guide](https://example.com/guide)";
   // (a) A lazy continuation cannot follow a fence, even one that sits inside the item.
   assert.equal(status(item("- item\n  ```\n  x\n  ```\n" + link), "sections"), "warn");

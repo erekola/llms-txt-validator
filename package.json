@@ -1,22 +1,32 @@
 {
   "name": "turva-llms-txt-validator",
-  "version": "0.3.21",
+  "version": "0.4.0",
   "description": "Validate a site's llms.txt structure: eight checks as pass/warn/fail plus two llms.txt v2 discovery checks that read pass or info and never move the summary, JSON output. Same checks as the hosted validator at turva.dev/llms-txt-validator.",
   "type": "module",
-  "main": "./src/index.mjs",
-  "exports": "./src/index.mjs",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
   "bin": {
-    "llms-txt-validate": "bin/cli.mjs"
+    "llms-txt-validate": "dist/bin/cli.js"
   },
   "files": [
-    "src",
-    "bin",
+    "dist/src/index.js",
+    "dist/src/index.d.ts",
+    "dist/bin/cli.js",
     "README.md",
     "LICENSE",
     "THIRD-PARTY-NOTICES.md"
   ],
   "scripts": {
-    "test": "node --test"
+    "build": "node -e \"import('node:fs').then(function(f){f.rmSync('dist',{recursive:true,force:true})})\" && node node_modules/typescript/bin/tsc -p tsconfig.json",
+    "typecheck": "node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test \"dist/test/**/*.test.js\"",
+    "prepack": "npm run build"
   },
   "engines": {
     "node": ">=22"
@@ -38,5 +48,9 @@
   "homepage": "https://turva.dev/llms-txt-validator",
   "bugs": {
     "url": "https://github.com/erekola/llms-txt-validator/issues"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^7.0.2"
   }
 }

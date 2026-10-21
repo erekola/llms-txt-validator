@@ -7,9 +7,9 @@ import { readFileSync } from "node:fs";
 // following it would have rejected the correct release (Tek-564, outside re-check W36 to W44).
 // The test also demands at least one mention of each form, so it cannot pass on an empty match.
 
-const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
-const forms = [
+const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
+const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+const forms: [string, RegExp][] = [
   ["Tag `vX.Y.Z`", /Tag `v(\d+\.\d+\.\d+)`/g],
   ["commits/vX.Y.Z", /commits\/v(\d+\.\d+\.\d+)/g],
   ["turva-llms-txt-validator@X.Y.Z", /turva-llms-txt-validator@(\d+\.\d+\.\d+)/g],

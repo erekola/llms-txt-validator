@@ -1,11 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateLlmsTxt, summarizeChecks, normalizeHostInput, isValidPublicHost, fetchLlmsTxt, findLinkRelations, validateV2Discovery, validateHost, cut, maskLocation, stripBidi, enteredPath } from "../src/index.mjs";
+import { validateLlmsTxt, summarizeChecks, normalizeHostInput, isValidPublicHost, fetchLlmsTxt, findLinkRelations, validateV2Discovery, validateHost, cut, maskLocation, stripBidi, enteredPath } from "../src/index.js";
+import type { FetchedLlmsTxt, FetchRedirect, LlmsCheck } from "../src/index.js";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const good = (text, extra = {}) => ({ status: 200, contentType: "text/plain; charset=utf-8", text, bytes: Buffer.byteLength(text), truncated: false, ...extra });
-const byId = (checks, id) => checks.find((c) => c.id === id);
+const good = (text: string, extra: Partial<FetchedLlmsTxt> = {}) => ({ status: 200, contentType: "text/plain; charset=utf-8", text, bytes: Buffer.byteLength(text), truncated: false, ...extra });
+const byId = (checks: LlmsCheck[], id: string): LlmsCheck => checks.find((c) => c.id === id)!;
 
 test("a well-formed llms.txt is valid", () => {
   const text = "# Example\n\n> One line about the site.\n\n## Docs\n\n- [Guide](https://example.com/guide)\n";
@@ -18,8 +19,8 @@ test("a well-formed llms.txt is valid", () => {
 test("an off-host redirect fails the first check and stops", () => {
   const checks = validateLlmsTxt({ redirect: true, reason: "off-host", status: 301, location: "https://example.com/llms.txt" });
   assert.equal(checks.length, 1);
-  assert.equal(checks[0].status, "fail");
-  assert.match(checks[0].detail, /different host/);
+  assert.equal(checks[0]!.status, "fail");
+  assert.match(checks[0]!.detail, /different host/);
   assert.equal(summarizeChecks(checks), "not valid");
 });
 
@@ -97,22 +98,22 @@ test("host normalization and public-host gate", () => {
   assert.equal(isValidPublicHost("intranet.local"), false);
 });
 
-function mkRedirect(status, location) {
-  return { status, headers: { get: (k) => (k.toLowerCase() === "location" ? location : null) }, body: null };
+function mkRedirect(status: number, location: string): Response {
+  return { status, headers: { get: (k: string) => (k.toLowerCase() === "location" ? location : null) }, body: null } as unknown as Response;
 }
 
-function mkOk(text) {
+function mkOk(text: string): Response {
   const bytes = new TextEncoder().encode(text);
   let sent = false;
   const body = { getReader: () => ({ read: async () => (sent ? { done: true } : (sent = true, { done: false, value: bytes })), cancel: async () => {} }) };
-  return { status: 200, headers: { get: (k) => (k.toLowerCase() === "content-type" ? "text/plain; charset=utf-8" : null) }, body };
+  return { status: 200, headers: { get: (k: string) => (k.toLowerCase() === "content-type" ? "text/plain; charset=utf-8" : null) }, body } as unknown as Response;
 }
 
 test("fetchLlmsTxt follows a same-site www redirect to 200", async () => {
   const orig = globalThis.fetch;
   globalThis.fetch = async (u) => (u === "https://ex.com/llms.txt" ? mkRedirect(301, "https://www.ex.com/llms.txt") : mkOk("# Ex\n"));
   try {
-    const f = await fetchLlmsTxt("ex.com");
+    const f = await fetchLlmsTxt("ex.com") as FetchedLlmsTxt;
     assert.equal(f.status, 200);
     assert.equal(f.redirectedFrom, "https://ex.com/llms.txt");
     assert.equal(f.finalUrl, "https://www.ex.com/llms.txt");
@@ -123,7 +124,7 @@ test("fetchLlmsTxt refuses an off-host redirect", async () => {
   const orig = globalThis.fetch;
   globalThis.fetch = async () => mkRedirect(301, "https://evil.example/llms.txt");
   try {
-    const f = await fetchLlmsTxt("ex.com");
+    const f = await fetchLlmsTxt("ex.com") as FetchRedirect;
     assert.equal(f.redirect, true);
     assert.equal(f.reason, "off-host");
   } finally { globalThis.fetch = orig; }
@@ -133,7 +134,7 @@ test("fetchLlmsTxt refuses a non-https redirect", async () => {
   const orig = globalThis.fetch;
   globalThis.fetch = async () => mkRedirect(302, "http://ex.com/llms.txt");
   try {
-    const f = await fetchLlmsTxt("ex.com");
+    const f = await fetchLlmsTxt("ex.com") as FetchRedirect;
     assert.equal(f.reason, "unsafe-target");
   } finally { globalThis.fetch = orig; }
 });
@@ -142,7 +143,7 @@ test("fetchLlmsTxt caps redirect chains", async () => {
   const orig = globalThis.fetch;
   globalThis.fetch = async (u) => mkRedirect(301, u === "https://ex.com/llms.txt" ? "https://www.ex.com/llms.txt" : "https://ex.com/llms.txt");
   try {
-    const f = await fetchLlmsTxt("ex.com");
+    const f = await fetchLlmsTxt("ex.com") as FetchRedirect;
     assert.equal(f.reason, "too-many");
   } finally { globalThis.fetch = orig; }
 });
@@ -302,7 +303,7 @@ test("the parser survives the shapes a real page throws at it", () => {
 
 test("validateHost cannot be pointed at another path by its caller options", async () => {
   const orig = globalThis.fetch;
-  const asked = [];
+  const asked: string[] = [];
   globalThis.fetch = async (u) => {
     asked.push(String(u));
     return new Response("# Example\n\n> One line.\n\n## Docs\n\n- [G](https://ex.com/g)\n", { status: 200, headers: { "content-type": "text/plain" } });
@@ -426,7 +427,7 @@ test("the CLI answers an error as JSON when --json was asked for", () => {
   // fileURLToPath, not .pathname: on Windows the pathname is "/C:/..." and node reads that as
   // "C:\C:\...", MODULE_NOT_FOUND, exit 1. Found 2026-09-05, when CI ran on Ubuntu only and
   // could not see it; ci.yml has carried a windows-latest row since.
-  const cli = fileURLToPath(new URL("../bin/cli.mjs", import.meta.url));
+  const cli = fileURLToPath(new URL("../bin/cli.js", import.meta.url));
   const r = spawnSync(process.execPath, [cli, "not a host", "--json"], { encoding: "utf8" });
   assert.equal(r.status, 2);
   assert.equal(r.stderr, "", "nothing on stderr in JSON mode");
@@ -483,8 +484,8 @@ test("an unclosed fence swallows the rest of the file, and that is the correct r
 });
 
 test("a redirect body is released before the next hop and before every refusal", async () => {
-  const mk = (make) => async () => make();
-  const run = async (build) => {
+  const mk = (make: () => Response) => async () => make();
+  const run = async (build: (n: number, body: () => object) => Response) => {
     let calls = 0, cancelled = 0;
     const real = globalThis.fetch;
     const body = () => ({ cancel: async () => { cancelled++; }, getReader: () => { throw new Error("the redirect body must not be read"); } });
@@ -492,18 +493,18 @@ test("a redirect body is released before the next hop and before every refusal",
     try { return { out: await fetchLlmsTxt("example.com"), calls, cancelled }; } finally { globalThis.fetch = real; }
   };
   const followed = await run((n, body) => n === 1
-    ? { status: 302, headers: new Headers({ location: "https://www.example.com/llms.txt" }), body: body() }
+    ? { status: 302, headers: new Headers({ location: "https://www.example.com/llms.txt" }), body: body() } as unknown as Response
     : new Response("# Site", { headers: { "content-type": "text/plain" } }));
   assert.equal(followed.calls, 2);
   assert.equal(followed.cancelled, 1, "the hop's body is cancelled, not left to the collector");
-  const refused = await run((n, body) => ({ status: 302, headers: new Headers({ location: "https://muu.example.org/llms.txt" }), body: body() }));
-  assert.equal(refused.out.reason, "off-host", "the refusal itself is unchanged");
+  const refused = await run((n, body) => ({ status: 302, headers: new Headers({ location: "https://muu.example.org/llms.txt" }), body: body() } as unknown as Response));
+  assert.equal((refused.out as FetchRedirect).reason, "off-host", "the refusal itself is unchanged");
   assert.equal(refused.cancelled, 1, "a refusal releases the body too");
   // A cancel that throws must not turn a redirect verdict into a thrown error.
   let calls = 0;
   const real = globalThis.fetch;
   globalThis.fetch = async () => (++calls === 1
-    ? { status: 302, headers: new Headers({ location: "https://www.example.com/llms.txt" }), body: { cancel: async () => { throw new Error("cancel failed"); } } }
+    ? { status: 302, headers: new Headers({ location: "https://www.example.com/llms.txt" }), body: { cancel: async () => { throw new Error("cancel failed"); } } } as unknown as Response
     : new Response("# Site", { headers: { "content-type": "text/plain" } }));
   try { assert.equal((await fetchLlmsTxt("example.com")).status, 200); } finally { globalThis.fetch = real; }
 });
@@ -589,12 +590,12 @@ test("many comments in the head are scanned in linear time", () => {
 const SECRET = "SYNTHETICPASSWORDNOTREAL";
 const QSECRET = "SYNTHETICQUERYNOTREAL";
 
-async function refused(location) {
+async function refused(location: string) {
   const orig = globalThis.fetch;
-  const asked = [];
+  const asked: unknown[] = [];
   globalThis.fetch = async (u) => { asked.push(u); return mkRedirect(302, location); };
   try {
-    const f = await fetchLlmsTxt("ex.com");
+    const f = await fetchLlmsTxt("ex.com") as FetchRedirect;
     return { f, asked, checks: validateLlmsTxt(f) };
   } finally { globalThis.fetch = orig; }
 }
@@ -611,7 +612,7 @@ test("an unsafe redirect with credentials is refused, not followed, and masked i
   assert.equal(f.reason, "unsafe-target");
   assert.equal(asked.length, 1);
   assert.equal(f.location, "https://ex.com/llms.txt?token=***");
-  assert.match(checks[0].detail, /unsupported target/);
+  assert.match(checks[0]!.detail, /unsupported target/);
   assert.doesNotMatch(JSON.stringify({ f, checks }), new RegExp(SECRET + "|" + QSECRET + "|user"));
 });
 
@@ -621,7 +622,7 @@ test("an off-host redirect is masked the same way before it is cut", async () =>
   const plain = await refused("https://other.example/llms.txt?token=" + QSECRET + "#frag");
   assert.equal(plain.f.reason, "off-host");
   assert.equal(plain.f.location, "https://other.example/llms.txt?token=***");
-  assert.match(plain.checks[0].detail, /different host/);
+  assert.match(plain.checks[0]!.detail, /different host/);
   assert.doesNotMatch(JSON.stringify([f, checks, plain]), new RegExp(SECRET + "|" + QSECRET + "|frag"));
 });
 
@@ -630,9 +631,9 @@ test("an unparseable and a too-many Location are masked too", async () => {
   assert.equal(bad.f.reason, "bad-location");
   assert.doesNotMatch(bad.f.location, new RegExp(SECRET + "|" + QSECRET));
   const orig = globalThis.fetch;
-  globalThis.fetch = async (u) => mkRedirect(301, u.startsWith("https://ex.com/") ? "https://www.ex.com/llms.txt?t=" + QSECRET : "/llms.txt?t=" + QSECRET);
+  globalThis.fetch = async (u) => mkRedirect(301, (u as string).startsWith("https://ex.com/") ? "https://www.ex.com/llms.txt?t=" + QSECRET : "/llms.txt?t=" + QSECRET);
   try {
-    const f = await fetchLlmsTxt("ex.com");
+    const f = await fetchLlmsTxt("ex.com") as FetchRedirect;
     assert.equal(f.reason, "too-many");
     assert.doesNotMatch(f.location, new RegExp(QSECRET));
   } finally { globalThis.fetch = orig; }
@@ -680,7 +681,7 @@ test("a same-host redirect with a query and a fragment is masked once accepted (
   const orig = globalThis.fetch;
   globalThis.fetch = async (u) => (u === "https://ex.com/llms.txt" ? mkRedirect(301, "https://ex.com/llms.txt?session=" + QSECRET + "#frag") : mkOk("# Ex\n\n> One line.\n\n## Docs\n\n- [Guide](https://example.com/guide)\n"));
   try {
-    const f = await fetchLlmsTxt("ex.com");
+    const f = await fetchLlmsTxt("ex.com") as FetchedLlmsTxt;
     assert.equal(f.redirectedFrom, "https://ex.com/llms.txt");
     assert.match(f.finalUrl, new RegExp(QSECRET));
     const http = byId(validateLlmsTxt(f), "http-status");
@@ -728,7 +729,7 @@ test("one trailing dot on a typed host names the same host (round 19, K7-P5)", a
   assert.equal(isValidPublicHost(normalizeHostInput("example.com..")), false);
   assert.equal(isValidPublicHost(normalizeHostInput("localhost.")), false);
   assert.equal(isValidPublicHost(normalizeHostInput("router.home.arpa.")), false);
-  const asked = [];
+  const asked: string[] = [];
   const orig = globalThis.fetch;
   globalThis.fetch = async (u) => { asked.push(String(u)); return mkOk(new URL(u).pathname === "/llms.txt" ? "# Site\n\n> Summary.\n" : "<html><head></head></html>"); };
   try {
@@ -786,7 +787,7 @@ test("enteredPath returns a typed path that is neither the root nor /llms.txt", 
 
 test("validateHost names a typed path it does not use and still reads /llms.txt", async () => {
   const orig = globalThis.fetch;
-  const asked = [];
+  const asked: string[] = [];
   globalThis.fetch = async (u) => {
     asked.push(String(u));
     return new Response("# Example\n\n> One line.\n\n## Docs\n\n- [G](https://ex.com/g)\n", { status: 200, headers: { "content-type": "text/plain" } });
@@ -797,12 +798,12 @@ test("validateHost names a typed path it does not use and still reads /llms.txt"
     assert.equal(asked[2], "https://ex.com/llms.txt", "the typed path is not fetched");
     assert.equal(asked[3], "https://ex.com/");
     assert.equal(byId(plain.checks, "input-path"), undefined);
-    assert.equal(typed.checks[0].id, "input-path");
-    assert.equal(typed.checks[0].status, "info");
+    assert.equal(typed.checks[0]!.id, "input-path");
+    assert.equal(typed.checks[0]!.status, "info");
     // The path moved to its own field (V10-P3-01, round 3 Tek-542, mirrored from worker.js
     // decision 19, Tek-526), so a JSON caller reads it without parsing the sentence.
-    assert.equal(typed.checks[0].value, "/docs/llms.txt");
-    assert.equal(typed.checks[0].detail, "This path is not used, because the validator always reads /llms.txt at the root of the host.");
+    assert.equal(typed.checks[0]!.value, "/docs/llms.txt");
+    assert.equal(typed.checks[0]!.detail, "This path is not used, because the validator always reads /llms.txt at the root of the host.");
     assert.equal(typed.summary, plain.summary, "information moves no summary");
     assert.equal(typed.checks.length, plain.checks.length + 1);
     assert.ok(!JSON.stringify(typed).includes("secret"), "the query is never shown");
@@ -820,7 +821,7 @@ test("maskLocation masks an opaque-scheme target the same way an unparseable one
 });
 
 test("the CLI target field masks an opaque-scheme argument too", () => {
-  const res = spawnSync(process.execPath, ["bin/cli.mjs", "u:AUDIT_SECRET@example.com/?token=TOPSECRET", "--json"]);
+  const res = spawnSync(process.execPath, ["dist/bin/cli.js", "u:AUDIT_SECRET@example.com/?token=TOPSECRET", "--json"]);
   const out = JSON.parse(res.stdout.toString());
   assert.equal(res.status, 2);
   assert.ok(!JSON.stringify(out).includes("AUDIT_SECRET"), JSON.stringify(out));

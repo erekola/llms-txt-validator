@@ -1,7 +1,7 @@
 // Test-only fixture, not shipped (test/ is not in package.json "files"). Stubs global fetch so a
 // CLI subprocess test can read a chosen llms.txt without a network call: the body comes from the
 // LLMS_TXT_BODY environment variable, every other URL answers with an empty HTML page.
-// Loaded with `node --import` ahead of bin/cli.mjs.
+// Loaded with `node --import` ahead of dist/bin/cli.js.
 globalThis.fetch = async (url) => {
   const u = String(url);
   if (u.endsWith("/llms.txt")) {
