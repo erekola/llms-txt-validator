@@ -69,7 +69,7 @@ try {
     // published link cannot write an escape sequence to the terminal. A check's reflected
     // value, when it has one, is printed ahead of the sentence, the same position the old
     // concatenated string put it in, so text output reads the same while the JSON field stays
-    // separate (round 3 Tek-542, mirrored from worker.js decision 19, Tek-526).
+    // separate (round 3 Tek-542, mirrored from worker.ts decision 19, Tek-526).
     console.log(result.target);
     for (const c of result.checks) console.log("  " + mark[c.status] + "  " + c.label + " (" + (c.value !== undefined ? c.value + " " : "") + c.detail + ")");
     console.log("result: " + result.summary);

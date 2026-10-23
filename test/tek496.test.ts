@@ -7,8 +7,8 @@ import { validateLlmsTxt, summarizeChecks, validateHost, findLinkRelations, isVa
 import type { LlmsCheck } from "../src/index.js";
 
 // Regression tests for 0.3.8 (Tek-496, outside audit 2026-09-26). The package mirrors the hosted
-// validator at turva.dev/llms-txt-validator, whose worker.js carries the same cases in
-// test/validator-tek496.test.mjs. Each case below gave the opposite result in 0.3.7.
+// validator at turva.dev/llms-txt-validator, whose worker.ts carries the same cases in
+// test/validator-tek496.test.ts. Each case below gave the opposite result in 0.3.7.
 
 const BS = String.fromCharCode(92);
 const ESC = String.fromCharCode(27);

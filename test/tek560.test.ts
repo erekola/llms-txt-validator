@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { validateLlmsTxt, summarizeChecks, findLinkRelations, maskLocation } from "../src/index.js";
 
 // Regression tests for 0.3.16 (Tek-560, outside review 2026-10-02, items V01 to V04, V06, V07, V08
-// and V10). The hosted validator carries the same cases in test/validator-tek560.test.mjs in the
+// and V10). The hosted validator carries the same cases in test/validator-tek560.test.ts in the
 // turva-worker repo. Each case below gave the opposite result in 0.3.15, except the guards that
 // say what still holds.
 

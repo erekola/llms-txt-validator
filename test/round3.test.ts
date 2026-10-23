@@ -47,7 +47,7 @@ test("VN1: the CLI target field masks the same underscore-username case", () => 
 });
 
 test("VN1: an @ with no / anywhere in the string is still read as a path, not userinfo", () => {
-  // Regression guard: "path@2x.png" must stay unmasked (validate.test.mjs already covers this
+  // Regression guard: "path@2x.png" must stay unmasked (validate.test.ts already covers this
   // for maskLocation directly; this repeats the exact boundary this fix must not cross).
   assert.equal(maskLocation("path@2x.png"), "path@2x.png");
 });
@@ -170,7 +170,7 @@ test("VN2: a collapsed reference, \"[label][]\", still resolves (regression guar
 });
 
 // --- V10-P3-01 (package side): the typed-path note carries its value in a separate field,
-// mirroring worker.js's decision 19 (Tek-526), instead of building it into the sentence.
+// mirroring worker.ts's decision 19 (Tek-526), instead of building it into the sentence.
 test("V10-P3-01: the input-path check's value and detail are separate fields", async () => {
   const orig = globalThis.fetch;
   globalThis.fetch = async () => new Response(

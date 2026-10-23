@@ -76,7 +76,7 @@ const UA = "turva-llms-txt-validator/" + VERSION + " (+https://turva.dev/llms-tx
 // pair leaves half of it, and the character is lost. How the half is written depends on
 // the runtime: Node's UTF-8 encoder replaces it with U+FFFD, and the hosted validator in
 // workerd wrote three bytes that were not valid UTF-8 (round 16 S3-1 and S3-2, measured
-// there 2026-09-03). Mirrors worker.js cut().
+// there 2026-09-03). Mirrors worker.ts cut().
 export function cut(s: string | number, n: number): string {
   s = String(s).slice(0, n);
   return /[\uD800-\uDBFF]$/.test(s) ? s.slice(0, -1) : s;
@@ -89,7 +89,7 @@ export function cut(s: string | number, n: number): string {
 // https://user:password@host/ kept both in the check's detail and in the returned location (outside
 // review, 2026-09-22). A target the URL parser refuses is masked by hand: nothing after the first ?
 // or # survives, and when the target has a scheme or starts with two slashes, everything up to the
-// last @ before them is shown as ***. Mirrors worker.js maskLocation().
+// last @ before them is shown as ***. Mirrors worker.ts maskLocation().
 export function maskLocation(href: string, base?: string): string {
   let u: URL | null = null;
   try { u = new URL(href, base); } catch { u = null; }
@@ -150,7 +150,7 @@ export function maskLocation(href: string, base?: string): string {
 // Unicode bidi controls (U+202A to U+202E, U+2066 to U+2069) have no place in a check's
 // detail: text quoted from the fetched file could otherwise read in a different order here
 // than in the file itself, and the right-to-left override is the classic way to do that
-// (round 19, V6-U1). Mirrors worker.js stripBidi().
+// (round 19, V6-U1). Mirrors worker.ts stripBidi().
 export function stripBidi(s: unknown): string {
   return String(s).replace(/[\u202A-\u202E\u2066-\u2069]/g, "");
 }
@@ -158,7 +158,7 @@ export function stripBidi(s: unknown): string {
 // C0 and C1 control characters leave a check's detail as well. JSON escapes them, but a program
 // that prints a detail to a terminal passes ESC through, so a published link could carry a
 // sequence that clears the screen (Tek-496).
-// Mirrors worker.js stripControls().
+// Mirrors worker.ts stripControls().
 export function stripControls(s: unknown): string {
   return String(s).replace(/[\u0000-\u001F\u007F-\u009F]/g, "");
 }
@@ -173,7 +173,7 @@ export function normalizeHostInput(raw: unknown): string | null {
   if (u.port && u.port !== "443" && u.port !== "80") return null;
   if (u.username || u.password) return null;
   // One trailing dot names the same host in absolute form, so "example.com." is read as
-  // example.com instead of refused (round 19, K7-P5). Mirrors worker.js normalizeHostInput().
+  // example.com instead of refused (round 19, K7-P5). Mirrors worker.ts normalizeHostInput().
   const typedHost = u.hostname;
   return typedHost.length > 1 && typedHost.endsWith(".") ? typedHost.slice(0, -1) : typedHost;
 }
@@ -183,7 +183,7 @@ export function normalizeHostInput(raw: unknown): string | null {
 // as a fetch proxy, so a typed /docs/llms.txt used to be dropped without a word while the result
 // described the root file (outside retest 2026-09-26). The result now names the unused path in an
 // info check. The case of the path is kept, and the query and fragment are never returned.
-// Mirrors worker.js enteredPath() (v3.176.0).
+// Mirrors worker.ts enteredPath() (v3.176.0).
 export function enteredPath(raw: unknown): string {
   let s = String(raw || "").trim();
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) s = "https://" + s;
@@ -748,7 +748,7 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
     add("http-status", "fail", "File exists at /llms.txt", "expected HTTP 200, got " + f.status);
     return checks;
   }
-  // An accepted redirect is shown masked as well (round 19, K7-2, mirrored from worker.js
+  // An accepted redirect is shown masked as well (round 19, K7-2, mirrored from worker.ts
   // v3.164.0): a query value or a fragment in a same-host Location used to reach this
   // detail as sent. An input with redirectedFrom and no finalUrl, which fetchLlmsTxt never returns but a
   // caller of this function can pass, names the address it was redirected from alone instead of ending
@@ -801,7 +801,7 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
   // Read the same way as the H1 check and the "late" blockquote search below: at most three
   // leading spaces, per CommonMark. A trim-first prefix test used to erase the difference, so
   // a four-space or tab-indented code block right after the title passed as the summary until
-  // 2026-09-27 (Tek-496, mirrored from worker.js).
+  // 2026-09-27 (Tek-496, mirrored from worker.ts).
   // A blockquote marker is 0-3 leading spaces plus ">", optionally followed by one space that
   // is then part of the marker and not the content; CommonMark reads ">Summary" and a tab the
   // same way, and four or more leading spaces stay indented code, not a blockquote (outside
@@ -821,7 +821,7 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
     add("summary", "pass", "Blockquote summary after the title", JSON.stringify(cut(summaryLine.trim(), 80)));
   } else {
     // A blockquote further down, before the first H2, is a summary in the wrong place and not a
-    // missing one, and the detail says which (outside retest 2026-09-26, mirrored from worker.js
+    // missing one, and the detail says which (outside retest 2026-09-26, mirrored from worker.ts
     // v3.176.0). The status is warn either way, because the format places the summary directly
     // after the title.
     const fence = fenceMask(lines);
@@ -1922,16 +1922,16 @@ export async function validateHost(input: unknown, opts: ValidateHostOptions = {
     discovery = validateV2Discovery(null, "the home page could not be read, so this was not measured");
   }
   const checks = validateLlmsTxt(fetched).concat(discovery);
-  // A path in the typed address is not used, and the result says so first (mirrored from worker.js
+  // A path in the typed address is not used, and the result says so first (mirrored from worker.ts
   // v3.176.0). Information moves no summary and no exit code.
   const unusedPath = enteredPath(input);
   // The typed path goes on its own field with the same 120 character cut it always had (VREG,
-  // round 3 Tek-542, mirrored from worker.js decision 19, Tek-526), instead of being built into
+  // round 3 Tek-542, mirrored from worker.ts decision 19, Tek-526), instead of being built into
   // the sentence, so a JSON caller reads the raw value from one field instead of parsing it
   // back out of a message meant for people.
   if (unusedPath) checks.unshift({ id: "input-path", status: "info", label: "Path in the address you entered", value: cut(unusedPath, 120), detail: "This path is not used, because the validator always reads /llms.txt at the root of the host." });
   // Text quoted from the fetched file leaves without bidirectional controls (round 19,
-  // V6-U1, mirrored from worker.js v3.164.0): a site's own H1 or summary could otherwise
+  // V6-U1, mirrored from worker.ts v3.164.0): a site's own H1 or summary could otherwise
   // read in another order here than in the file itself.
   const stripped = checks.map((c) => (typeof c.detail === "string" ? { ...c, detail: stripControls(stripBidi(c.detail)) } : c));
   return { target: "https://" + host + "/llms.txt", summary: summarizeChecks(stripped), checks: stripped };

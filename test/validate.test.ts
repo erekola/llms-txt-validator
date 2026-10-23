@@ -352,7 +352,7 @@ test("a scheme without a host is not an absolute link", () => {
 });
 
 // The same contract, written out in both implementations: the npm package and the hosted
-// validator in turva-worker/src/worker.js. The cases are stated against the EXPECTED
+// validator in turva-worker/src/worker.ts. The cases are stated against the EXPECTED
 // public behaviour, not against each other, because two copies agreeing proves only that
 // they are copies. Added 2026-09-09 after a quoted attribute value and a quoted Link
 // parameter both reported a relation the page does not publish.
@@ -443,7 +443,7 @@ test("the CLI answers an error as JSON when --json was asked for", () => {
 // and an H2 indented by up to three spaces is a heading CommonMark recognises. Both were
 // read the other way round: the fenced example counted as the file's only section and its
 // only link, and the correctly indented heading counted as no section at all. The same
-// cases run against the hosted twin in turva-worker/test/routes.test.mjs; the two
+// cases run against the hosted twin in turva-worker/test/routes.test.ts; the two
 // implementations answer identically by rule.
 test("a section and a link inside a code fence are not the file's own structure", () => {
   for (const fence of ["```", "~~~"]) {
@@ -657,7 +657,7 @@ test("0.3.5 later reviews: a refused target hides everything up to its last @ be
   assert.equal(maskLocation("https://good.example/a@2x.png"), "https://good.example/a@2x.png");
 });
 
-// Round 19 (2026-09-23): two more fixes mirrored from worker.js v3.164.0, found in a
+// Round 19 (2026-09-23): two more fixes mirrored from worker.ts v3.164.0, found in a
 // hostile audit of the public repos. K7-2 is the counterpart of the 0.3.5 tests above: an
 // ACCEPTED redirect's target was shown as sent, not masked, so a query value or a fragment
 // in a same-host Location reached the http-status detail unmasked. V6-U1 is unrelated to
@@ -817,7 +817,7 @@ test("validateHost names a typed path it does not use and still reads /llms.txt"
     assert.equal(byId(plain.checks, "input-path"), undefined);
     assert.equal(typed.checks[0]!.id, "input-path");
     assert.equal(typed.checks[0]!.status, "info");
-    // The path moved to its own field (V10-P3-01, round 3 Tek-542, mirrored from worker.js
+    // The path moved to its own field (V10-P3-01, round 3 Tek-542, mirrored from worker.ts
     // decision 19, Tek-526), so a JSON caller reads it without parsing the sentence.
     assert.equal(typed.checks[0]!.value, "/docs/llms.txt");
     assert.equal(typed.checks[0]!.detail, "This path is not used, because the validator always reads /llms.txt at the root of the host.");
