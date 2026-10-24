@@ -1,5 +1,9 @@
 # turva-llms-txt-validator changelog
 
+## 0.4.3 (2026-10-24)
+
+The README gains a section on the move from JavaScript to TypeScript in 0.4.0 and the two fixes in 0.4.1. No code changed. The compiled files differ from 0.4.2 only in comments, which now name src/worker.ts and the .test.ts files of the hosted validator.
+
 ## 0.4.2 (2026-10-21)
 
 The README is rewritten for the TypeScript package. It documents `validateHost` and its result types with a TypeScript example, and it adds sections on the release process and on local development. The sample output is the command-line output of a run on 2026-10-21. No code changed. The compiled files are the same as in 0.4.1.

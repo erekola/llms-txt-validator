@@ -201,17 +201,21 @@ The source is TypeScript under `src/` and `bin/`, compiled with `tsc` to `dist/`
 
 GitHub Actions tests Node.js 22 and 24 on Ubuntu and Node.js 22 on Windows. A version tag starts the release workflow, `.github/workflows/publish.yml`. It runs the type check and the tests, fails when the tag and `package.json` name different versions, publishes with npm trusted publishing over OIDC and creates the GitHub release from the CHANGELOG section. npm writes a provenance attestation. No npm token is stored in the repository or in the workflow.
 
-The entry point moved to `dist/src/index.js` in 0.4.0, behind the same `exports` name. The CLI kept its flags, its output and its exit codes. See [CHANGELOG.md](https://github.com/erekola/llms-txt-validator/blob/main/CHANGELOG.md) for each release.
+## From JavaScript to TypeScript
+
+Up to 0.3.21 the package was plain JavaScript modules, starting with `src/index.mjs`. Version 0.4.0, released on 21 October 2026, ports it to TypeScript compiled to `dist/`, and the entry point moved to `dist/src/index.js` behind the same `exports` name. The compiled library has the same 12 493 JavaScript tokens as 0.3.21, apart from the relative path to `package.json`. A differential run fed both versions 4 160 000 generated `llms.txt` inputs and 832 000 HTML heads and found no difference. The CLI kept its flags, its output and its exit codes.
+
+The strict type check found two inputs that could leave `undefined` in a check's detail. Neither `fetchLlmsTxt` nor `validateHost` produces them, and 0.4.1 fixed both. Each release is described in [CHANGELOG.md](https://github.com/erekola/llms-txt-validator/blob/main/CHANGELOG.md).
 
 ## Verify a release
 
 GitHub Actions publishes every version from 0.1.3 on with npm trusted publishing, and each one carries a provenance attestation. To check one, install it in an empty directory and ask npm to verify the signatures. Replace the version with the one you want to check.
 
 ```sh
-mkdir verify-llms && cd verify-llms && npm init -y && npm install turva-llms-txt-validator@0.4.2 --ignore-scripts && npm audit signatures
+mkdir verify-llms && cd verify-llms && npm init -y && npm install turva-llms-txt-validator@0.4.3 --ignore-scripts && npm audit signatures
 ```
 
-`npm audit signatures` checks the registry signature and the provenance attestation of each installed package that has one. The attestation of this package names three things to compare with what you expect: the repository `github.com/erekola/llms-txt-validator`, the workflow file `.github/workflows/publish.yml` and the commit that produced the tarball. The npm version page shows them under Provenance. Tag `v0.4.2` must point at that same commit, and `gh api repos/erekola/llms-txt-validator/commits/v0.4.2 --jq .sha` prints it. A mismatch is a reason not to use that version. Provenance proves which workflow built a release and from which commit. It does not prove that the code is safe, so reading the source and the dependencies stays your job.
+`npm audit signatures` checks the registry signature and the provenance attestation of each installed package that has one. The attestation of this package names three things to compare with what you expect: the repository `github.com/erekola/llms-txt-validator`, the workflow file `.github/workflows/publish.yml` and the commit that produced the tarball. The npm version page shows them under Provenance. Tag `v0.4.3` must point at that same commit, and `gh api repos/erekola/llms-txt-validator/commits/v0.4.3 --jq .sha` prints it. A mismatch is a reason not to use that version. Provenance proves which workflow built a release and from which commit. It does not prove that the code is safe, so reading the source and the dependencies stays your job.
 
 ## Development
 
