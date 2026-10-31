@@ -898,7 +898,7 @@ test("a collapsed reference link, \"[label][]\", uses the link text as the label
 test("an unresolved reference link is read as plain brackets, not as a link", () => {
   const text = "# Example\n\n> Summary\n\n## Docs\n\n- [Guide][missing]\n";
   const checks = validateLlmsTxt(good(text));
-  assert.equal(byId(checks, "links").detail, "no markdown links found");
+  assert.match(byId(checks, "links").detail, /^no markdown links found/);
 });
 
 test("a code span that crosses a real line ending masks its whole content, in both the links and the sections check", () => {

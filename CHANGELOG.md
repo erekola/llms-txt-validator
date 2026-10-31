@@ -1,5 +1,13 @@
 # turva-llms-txt-validator changelog
 
+## 0.5.0 (2026-10-31)
+
+Two changes to the checks, both mirrored from the hosted validator.
+
+The HTML check no longer warns on angle brackets inside code. Inline code spans, fenced code and backslash-escaped angle brackets are blanked before the file is read for tags, so `https://example.com/models/<endpoint-id>/llms.txt` in a code span, `submit_<form>_form` and an escaped `\<node-name\>` pass. A real tag, a closing tag or a comment start in prose still warns, and an autolink is still not a tag.
+
+The links check now warns when a list line under an H2 looks like a link entry but is not a Markdown link. Real llms.txt files show two shapes: an entry whose destination is not closed, such as `- [Name](https://example.com/a.md: notes)`, and an entry that starts with an en dash, an em dash or a bullet instead of a list marker. The warning is part of the existing links check, so the check count and the JSON shape are the same. Its detail names the count and the first five line numbers. A valid entry does not warn, with or without notes after the link. Neither does a task list box.
+
 ## 0.4.3 (2026-10-24)
 
 The README gains a section on the move from JavaScript to TypeScript in 0.4.0 and the two fixes in 0.4.1. No code changed. The compiled files differ from 0.4.2 only in comments, which now name src/worker.ts and the .test.ts files of the hosted validator.

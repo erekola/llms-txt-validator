@@ -81,25 +81,25 @@ test("V13 D5-1: the CLI --json target never carries the password of a slashless 
 test("VREG1: a definition with an unquoted trailing word is not a definition", () => {
   const text = prefix + "- [Guide][guide]\n\n[guide]: https://example.com/guide not-a-title\n";
   const checks = validateLlmsTxt(good(text));
-  assert.equal(byId(checks, "links").detail, "no markdown links found");
+  assert.match(byId(checks, "links").detail, /^no markdown links found/);
 });
 
 test("VREG1: a definition-shaped line inside an inline code span is literal code", () => {
   const text = prefix + "- [Guide][guide]\n\n`some code\n[guide]: https://example.com/guide\nend code`\n";
   const checks = validateLlmsTxt(good(text));
-  assert.equal(byId(checks, "links").detail, "no markdown links found");
+  assert.match(byId(checks, "links").detail, /^no markdown links found/);
 });
 
 test("VREG1: a definition-shaped line that continues open paragraph text is not a definition", () => {
   const text = prefix + "- [Guide][guide]\n\nA paragraph\n[guide]: https://example.com/guide\n";
   const checks = validateLlmsTxt(good(text));
-  assert.equal(byId(checks, "links").detail, "no markdown links found");
+  assert.match(byId(checks, "links").detail, /^no markdown links found/);
 });
 
 test("VREG1: fence removal does not join a link target across a fenced code block", () => {
   const text = prefix + "- [Guide](\n```\nanything\n```\n  https://example.com/guide\n  )\n";
   const checks = validateLlmsTxt(good(text));
-  assert.equal(byId(checks, "links").detail, "no markdown links found");
+  assert.match(byId(checks, "links").detail, /^no markdown links found/);
 });
 
 // --- V03-VREG2: codeSpanMask must not cross a block boundary (list item, heading, or a blank
@@ -160,7 +160,7 @@ test("VN2: a shortcut reference does not resolve the definition line against its
 test("VN2: an unresolved shortcut reference is read as plain brackets", () => {
   const text = prefix + "- [Guide]\n";
   const checks = validateLlmsTxt(good(text));
-  assert.equal(byId(checks, "links").detail, "no markdown links found");
+  assert.match(byId(checks, "links").detail, /^no markdown links found/);
 });
 
 test("VN2: a collapsed reference, \"[label][]\", still resolves (regression guard)", () => {

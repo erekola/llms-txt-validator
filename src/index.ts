@@ -697,6 +697,62 @@ function h2Lines(lines: string[], fenced: boolean[]): { h2: boolean[]; under: bo
   return { h2, under };
 }
 
+// Code is not markup (Tek-730, 2026-10-31). Before the HTML check reads the file, every character
+// of an inline code span and every backslash-escaped angle bracket is blanked, so
+// `https://fal.ai/models/<endpoint-id>/llms.txt`, `submit_<form>_form` and an escaped
+// \<node-name\> no longer read as tags. The text it receives is the prose the links check also
+// reads, with fenced lines already blanked, so fenced code is not markup either. Line breaks stay,
+// so a tag split over two lines keeps its shape. The span rule is codeSpanMask's, which is
+// CommonMark's: an unclosed backtick run, or a pair that crosses a block boundary, is literal text.
+// A real tag, a closing tag or a comment start in prose still warns, and an autolink is still not
+// a tag. The package turva-llms-txt-validator mirrors this from 0.5.0.
+function blankCodeForHtml(prose: string): string {
+  const mask = codeSpanMask(prose);
+  const out: string[] = [];
+  for (let i = 0; i < prose.length; i++) {
+    const c = prose[i]!;
+    out.push(c !== "\n" && (mask[i] === 1 || ((c === "<" || c === ">") && isEscaped(prose, i))) ? " " : c);
+  }
+  return out.join("");
+}
+
+// List lines that look like a link entry and are not one (Tek-730, 2026-10-31). Two measured
+// shapes: an entry whose destination is not closed, "- [Name](https://x.example/a.md: notes)",
+// which holds a space and so is no CommonMark link, and an entry whose marker is an en dash, an
+// em dash or a bullet, which is no Markdown list marker. Both read as links to a person and are
+// invisible to the parser, so the links check counted the file as fine while an agent skipped the
+// entry. Only lines outside fences and under an H2 are read. A line counts when it opens, after
+// optional indentation, with a list marker (a hyphen, an asterisk, a plus or a number with a
+// period or a parenthesis) or one of the three look-alike markers, then white space and "[", and
+// no link that collectLinks found starts at that "[". A line with one of the three look-alike
+// markers counts whether or not its link parses, because it is no list item either way. A task
+// list box such as "- [x] done" is not an entry. Returns the one-based line numbers.
+function unparsedLinkEntries(lines: string[], fenced: boolean[], linkAt: Set<number>): number[] {
+  const hits: number[] = [];
+  const h2 = h2Lines(lines, fenced).h2;
+  let inH2 = false, offset = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i]!;
+    const start = offset;
+    offset += (fenced[i] ? 0 : l.length) + 1;
+    if (fenced[i]) continue;
+    if (h2[i]) { inH2 = true; continue; }
+    if (/^ {0,3}#(?:[ \t]|$)/.test(l)) { inH2 = false; continue; }
+    if (!inH2) continue;
+    const m = /^[ \t]*(?:[-*+]|\d{1,9}[.)]|[\u2013\u2014\u2022])[ \t]+\[/.exec(l);
+    if (!m) continue;
+    const alt = /^[ \t]*[\u2013\u2014\u2022]/.test(l);
+    const bracketAt = m[0].length - 1;
+    if (/^\[[ xX]\](?:[ \t]|$)/.test(l.slice(bracketAt))) continue;
+    if (alt || !linkAt.has(start + bracketAt)) hits.push(i + 1);
+  }
+  return hits;
+}
+function unparsedEntriesNote(hits: number[]): string {
+  const n = hits.length;
+  return "; " + (n === 1 ? "1 list line looks like a link entry but is not a Markdown link, so an agent will not follow it" : n + " list lines look like link entries but are not Markdown links, so an agent will not follow them") + " (line" + (n === 1 ? "" : "s") + " " + hits.slice(0, 5).join(", ") + (n > 5 ? " and " + (n - 5) + " more" : "") + ")";
+}
+
 // The text of an ATX H1, or null when the line is not one. One to three leading spaces, a
 // single "#", then a space, a tab or the end of the line. A closing run of "#" preceded by a
 // space or a tab is not part of the title, and the title is what remains once both ends are
@@ -969,6 +1025,13 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
     const hostless = named.length - absolute - relativeCount;
     add("links", "warn", "Markdown links an agent can follow", named.length + " links, " + relativeCount + " relative" + (hostless > 0 ? " and " + hostless + " that are not valid http or https URLs" : "") + "; absolute URLs travel better when the file is read out of context");
   }
+  // A list line that looks like a link entry but is not one (Tek-730) turns the links check to a warn.
+  const lookalikes = unparsedLinkEntries(lines, fenced, new Set(proseLinks.map((m) => m.at)));
+  if (lookalikes.length > 0) {
+    const lk = checks[checks.length - 1]!;
+    lk.status = "warn";
+    lk.detail += unparsedEntriesNote(lookalikes);
+  }
   if (f.truncated) {
     add("size", "warn", "Small enough to be cheap to read", "over 256 KB, read truncated");
   } else if (f.bytes <= 51200) {
@@ -983,8 +1046,10 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
   // operator such as the "+" in "a <b + c > d" does not. The tag name itself is ASCII. An unquoted
   // value may not start with a quote, which keeps the quoted and the unquoted form from matching
   // the same text, so the scan stays linear. A tag still open at the end of the file, as in
-  // '<div class="x"', has no closing ">" and does not warn.
-  if (/<[a-zA-Z][a-zA-Z0-9-]*(?:\s+[^\s"'<>\/=\p{L}\p{N}_]*[\p{L}\p{N}_][^\s"'<>\/=]*(?:\s*=\s*(?:"[^"]*"|'[^']*'|(?!["'])[^\s<>]+))?)*\s*\/?>|<\/[a-zA-Z][a-zA-Z0-9-]*\s*>|<!--/u.test(text)) {
+  // '<div class="x"', has no closing ">" and does not warn. Code is blanked first (Tek-730): a tag-like
+  // string inside an inline code span, a fenced block or after a backslash is not markup.
+  const htmlScan = blankCodeForHtml(proseText);
+  if (/<[a-zA-Z][a-zA-Z0-9-]*(?:\s+[^\s"'<>\/=\p{L}\p{N}_]*[\p{L}\p{N}_][^\s"'<>\/=]*(?:\s*=\s*(?:"[^"]*"|'[^']*'|(?!["'])[^\s<>]+))?)*\s*\/?>|<\/[a-zA-Z][a-zA-Z0-9-]*\s*>|<!--/u.test(htmlScan)) {
     add("no-html", "warn", "No HTML markup in the file", "HTML tags found; llms.txt should be plain markdown");
   } else {
     add("no-html", "pass", "No HTML markup in the file", "plain markdown");
