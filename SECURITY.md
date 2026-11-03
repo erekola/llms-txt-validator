@@ -2,10 +2,6 @@
 
 ## Supported Versions
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 0.4.x   | :white_check_mark: |
-
 Fixes ship as a new release rather than as a patch to an older one, so the
 latest published version is the supported one.
 
@@ -30,7 +26,7 @@ workflow, so the provenance attestation binds the tarball to that build.
 Two documents per run, the target site's /llms.txt and its home page (/),
 both over https. The target has to be a public domain name, redirects are
 followed only to the same host or its www/apex twin, each fetch times out
-after 8 seconds and the read is capped at 256 KB. Nothing is stored.
+after 8 seconds and the read is capped at 256 KiB (262,144 bytes). Nothing is stored.
 README.md documents the rules in full, including what the host check does
 and does not cover.
 
