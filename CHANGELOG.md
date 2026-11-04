@@ -1,5 +1,16 @@
 # turva-llms-txt-validator changelog
 
+## 0.6.0 (2026-11-04)
+Two changes to the checks, mirrored from the hosted validator as of site 3.221.0, and one change to the test matrix. This release changes which files pass in both directions, and it changes the wording of every sentence the validator wrote with a semicolon.
+
+Backtick pairs are now read closer to how CommonMark reads blocks. A heading line is a block of its own, so its backtick no longer pairs with the next line. An empty list item and a numbered item that does not start at 1 no longer end a paragraph. A backtick pair across such a line is now inline code, and a link inside it does not count. If such a line closes an open list item, it still starts a new item there. Thematic breaks and setext underlines now end a paragraph too. A fence indented past three columns inside a list item now hides what it holds, closed or not, in either fence character, as long as it sits less than four columns past the item's content column. Further in, CommonMark reads indented code, and this validator still counts a link in it. The link counts were compared with commonmark.js 0.31.2. Block quotes and HTML blocks are still not read as blocks here.
+
+An older gap now shows more often. When a fence is opened on a list marker line, at four or more columns or by a tab, its closing line at 0 to 3 columns reads as a new opening fence, and the lines after it are skipped until the next fence. Earlier versions counted a link inside the first fence, and that count could mask the gap, so such a file can now warn that it has no links or no file list.
+
+The sentences the validator writes in a check's detail no longer hold a semicolon. A sentence break stands there now, as in `no H2 sections found. Sections are the convention for grouping links`. This moves no status. A script that matches a detail as text has to follow, and `id` and `status` are the fields to read.
+
+GitHub Actions now also tests Node.js 26 on Ubuntu, so the matrix runs Node.js 22, 24 and 26 on Ubuntu and Node.js 22 on Windows.
+
 ## 0.5.1 (2026-11-04)
 Four changes to the checks, mirrored from the hosted validator as of site 3.220.0. This release changes which files pass in both directions.
 

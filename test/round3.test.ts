@@ -198,17 +198,19 @@ const BSL = String.fromCharCode(92);
 const p745 = "# T\n\n> Summary\n\n## Docs\n\n";
 const linksCheck = (text: string) => { const c = byId(validateLlmsTxt(good(text)), "links"); return c.status + " | " + c.detail; };
 
-// codeSpanMask is not exported, so the compiled module is copied next to itself, in dist/src, with one export
-// added. It has to sit there because the module reads package.json relative to its own folder.
+// codeSpanMask and inlineBlockReader are not exported, so the compiled module is copied next to itself, in dist/src,
+// with an export list added. It has to sit there because the module reads package.json relative to its own folder.
 let maskCache: ((text: string) => Uint8Array) | null = null;
+let readerCache: (() => (line: string) => number) | null = null;
 async function loadMask(): Promise<(text: string) => Uint8Array> {
   if (maskCache) return maskCache;
   const indexUrl = new URL("../src/index.js", import.meta.url);
   const copy = new URL("../src/index-with-mask-" + process.pid + ".mjs", import.meta.url);
-  writeFileSync(copy, readFileSync(indexUrl, "utf8") + "\nexport { codeSpanMask };\n");
+  writeFileSync(copy, readFileSync(indexUrl, "utf8") + "\nexport { codeSpanMask, inlineBlockReader };\n");
   try {
     const mod = await import(copy.href);
     maskCache = mod.codeSpanMask as (text: string) => Uint8Array;
+    readerCache = mod.inlineBlockReader as () => (line: string) => number;
     return maskCache;
   } finally {
     rmSync(copy, { force: true });
@@ -255,23 +257,23 @@ test("Tek-745: the mask itself, run by run", async () => {
   assert.equal(shown(BSL + "``a` b"), "--`a`--");
 });
 
-// The old decision, kept here as the reference the block counters are compared with.
-function crossesBlockBoundary(text: string, start: number, end: number): boolean {
-  const inner = text.slice(start, end);
-  if (/\n[ \t]*\n/.test(inner)) return true;
-  const lines = inner.split("\n");
-  for (let i = 1; i < lines.length; i++) {
-    if (/^ {0,3}(#{1,6}(?:[ \t]|$)|[-*+][ \t]|\d{1,9}[.)][ \t])/.test(lines[i]!)) return true;
-  }
-  return false;
-}
-// The same scan as codeSpanMask with the new rule (a crossing pair consumes nothing) but the decision
-// taken by the old function for every candidate, written the plain way with no counters and no pointers.
-function referenceMask(text: string): Uint8Array {
+// The decision for a pair taken from the lines its two runs sit on, the block of every line read up front. Which block a
+// line belongs to is the reader's, and the CM_LINKS table pins that against commonmark.js. This reference checks the scan
+// around it, written the plain way with no counters and no pointers.
+function referenceMask(text: string, makeReader: () => (line: string) => number): Uint8Array {
   const mask = new Uint8Array(text.length);
+  const blockOf = makeReader();
+  const blocks = new Int32Array(text.length);
+  let lineStart = 0;
+  for (const line of text.split("\n")) {
+    const block = blockOf(line);
+    blocks.fill(block, lineStart, lineStart + line.length + 1);
+    if (block < 0) mask.fill(1, lineStart, lineStart + line.length);
+    lineStart += line.length + 1;
+  }
   const runs: { at: number; len: number; escaped: boolean }[] = [];
   for (let i = 0; i < text.length; ) {
-    if (text[i] !== "`") { i++; continue; }
+    if (text[i] !== "`" || blocks[i]! < 0) { i++; continue; }
     let j = i;
     while (j < text.length && text[j] === "`") j++;
     let n = 0;
@@ -288,7 +290,7 @@ function referenceMask(text: string): Uint8Array {
     if (m === runs.length) continue;
     const start = r.escaped ? r.at + 1 : r.at;
     const end = runs[m]!.at + runs[m]!.len;
-    if (crossesBlockBoundary(text, start, end)) continue;
+    if (blocks[start] !== blocks[end - 1]) continue;
     mask.fill(1, start, end);
     k = m;
   }
@@ -307,16 +309,16 @@ function seeded(seed: number) {
   };
 }
 
-test("Tek-745: the block counters decide every pair as the old function did, on 3000 generated texts", async () => {
+test("Tek-747: the block number on each run decides every pair as a plain scan does, on 3000 generated texts", async () => {
   const codeSpanMask = await loadMask();
-  const parts = ["`", "``", "```", BSL + "`", "word", " ", "  ", "\t", "\n", "\n", "\n\n", "\n   \n", "\n# h\n", "\n## ", "\n- item ", "\n* ", "\n+ x", "\n1. n ", "\n12) m ", "\n    - indented ", "\n#nohash ", "[a](b)", "x"];
+  const parts = ["`", "``", "```", BSL + "`", "word", " ", "  ", "\t", "\n", "\n", "\n\n", "\n   \n", "\n# h\n", "\n## ", "\n- item ", "\n* ", "\n+ x", "\n1. n ", "\n12) m ", "\n    - indented ", "\n#nohash ", "\n2. n ", "\n14) ", "\n*\n", "\n-\n", "\n***\n", "\n===\n", "\n  2. k ", "[a](b)", "x"];
   const rnd = seeded(745);
   let withSpans = 0, crossing = 0;
   for (let n = 0; n < 3000; n++) {
     const count = 1 + Math.floor(rnd() * 24);
     let text = "";
     for (let i = 0; i < count; i++) text += parts[Math.floor(rnd() * parts.length)]!;
-    const got = codeSpanMask(text), want = referenceMask(text);
+    const got = codeSpanMask(text), want = referenceMask(text, readerCache!);
     assert.deepEqual(Array.from(got), Array.from(want), "text " + JSON.stringify(text) + " (seed 745, case " + n + ")");
     if (got.some((v) => v === 1)) withSpans++;
     if (/`[^`]*\n[^`]*`/.test(text)) crossing++;
@@ -356,4 +358,177 @@ test("Tek-745: the mask stays linear when many nested pairs all cross a block bo
   const ratio = best(large) / best(small);
   const sizes = large.length / small.length;
   assert.ok(ratio < sizes * 1.5, sizes.toFixed(1) + "x the input took " + ratio.toFixed(1) + "x as long");
+});
+
+// --- Tek-747: the block reading of codeSpanMask against commonmark.js 0.31.2, the CommonMark reference implementation.
+// Every count below is what that parser gave on 2026-11-04 for the document with @ replaced by one absolute link. Where
+// micromark differs, on "01.", the reference implementation decides, and it compares the start number as a number.
+const CM_LINKS: [string, number][] = [
+  // A heading line is a block of its own, so its backtick does not pair with the next line.
+  ["## a ` @\nc ` d\n", 1],
+  ["## a `\n` @ `\n", 0],
+  ["### a ` b\n@ `\n", 1],
+  ["## a `b` @\nc\n", 1],
+  ["a `\n## b` @\n", 1],
+  ["a\n## b ` @\nc ` d\n", 1],
+  // An empty item cannot interrupt a paragraph. A lone hyphen there is a setext underline, and an empty item inside an open list is a real item.
+  ["a `@\n* \nc` d\n", 0],
+  ["a `@\n+\nc` d\n", 0],
+  ["a `@\n1.\nc` d\n", 0],
+  ["a `@\n1. \nc` d\n", 0],
+  ["a `@\n- \nc` d\n", 1],
+  ["a `@\n-\nc` d\n", 1],
+  ["- a `@\n*\nc` d\n", 1],
+  ["* a `@\n*\n* c` d\n", 1],
+  ["a\n\n*\n`@\nb` c\n", 0],
+  // An ordered item that does not start at 1 cannot interrupt a paragraph, unless a line indented less than the open item closes that item.
+  ["a `@\n2. c` d\n", 0],
+  ["a `@\n14) c` d\n", 0],
+  ["a `@\n0. c` d\n", 0],
+  ["a `@\n1. c` d\n", 1],
+  ["a `@\n01. c` d\n", 1],
+  ["1. a `@\n2. c` d\n", 1],
+  ["- a `@\n2. c` d\n", 1],
+  ["- a `@\n  2. c` d\n", 0],
+  ["- a\n\nb `@\n2. c` d\n", 0],
+  ["1. a\n\n   b `@\n2. c` d\n", 1],
+  ["1. a\nb `@\n2. c` d\n", 1],
+  ["1. 2. a `@\n   3. c` d\n", 1],
+  ["- a\n  - b `@\n  2. c` d\n", 1],
+  ["2. a `@\n3. c` d\n", 1],
+  ["-   a `@\n  2. c` d\n", 1],
+  ["-\ta `@\n  2. c` d\n", 1],
+  ["-      a `b\n  c` @ `\n", 0],
+  // A thematic break and a setext underline end a paragraph. "=" under a lazy line does not, and with no paragraph open it is text.
+  ["a `@\n***\nc` d\n", 1],
+  ["a `@\n- - -\nc` d\n", 1],
+  ["a `@\n===\nc` d\n", 1],
+  ["a `@\n---\nc` d\n", 1],
+  ["- a `@\n===\nc` d\n", 0],
+  ["- a `@\n---\nc` d\n", 1],
+  ["a\n\n===\n`@\nb` c\n", 0],
+  // A fence the caller does not blank stays one block, and so does a run of indented code, so a backtick fence hides what it
+  // holds. An item closes with its fence. An empty item ends at a blank line. Then tab stops and the five-column rule.
+  ["- e:\n    ```md\n    # t\n    - @\n    ```\n", 0],
+  ["- i:\n    ```sh\n    # c\n    curl @\n    ```\n", 0],
+  ["- e:\t\n\t```md\n\t# t\n\t@\n\t```\n", 0],
+  ["- e:\n    ```\n    a\n\n    @\n    ```\n", 0],
+  ["1. e:\n    ```\n    2. a\n    @\n    ```\n", 0],
+  ["- e:\n    ```\n    a\nb ` @\n\nc`\n", 1],
+  ["- e:\n    ````\n    ```\n    @\n    ````\n", 0],
+  ["a\n\n    ```\n    @\n    ```\n", 0],
+  ["a\n\n    `b\n    @\n    c`\n", 0],
+  ["*\n\n   + `\n    ##   `@`\n", 1],
+  ["1.\n\n   a `@\n2. b` c\n", 0],
+  ["1.    a `@\n  \t1. c` d\n", 0],
+  ["-\ta `@\n    1. c` d\n", 1],
+  ["-     a `b\n  c` @ `\n", 0],
+  ["-    a `@\n  2. c` d\n", 1],
+  ["- e:\n    ```\n    ``` x\n    ` @\n\n    `\n    ```\n", 0],
+  ["- e:\n    ```\n        ```\n    ` @\n\n    `\n    ```\n", 0],
+  ["    a\n# h ` @\n    b `\n", 1],
+  ["*\n  a\n\n  b `@\n2. c` d\n", 1],
+  // A fence line is masked whole, whatever closes the fence and whichever character it uses, and it holds no run.
+  ["- e:\n    ~~~\n    # t\n    @\n    ~~~\n", 0],
+  ["- e:\n    ~~~\n    @\n    ~~~\n", 0],
+  ["- e:\n    ```\n    # t\n    @\n- b\n", 0],
+  ["- e:\n    ```\n    @\n    ````\n", 0],
+  ["- e:\n    ```\n    ```js\n    @\n    ```\n", 0],
+  ["- ```md\n  # t\n  @\n  ```\n", 0],
+  ["- ``` @\n  a\n  ```\n", 0],
+  ["- e:\n    ```\n    `\n    ```\n  @\n    ```\n    `\n    ```\n", 1],
+  ["- a\n\n  *\n\n  b `@\n2. c` d\n", 1],
+  ["- e:\n    ~~~\n    ```\n    @\n    ~~~\n", 0],
+  ["- e:\n    ```\n     ```\n  @\n", 1],
+  // What did not change.
+  ["a `@\nb` c\n", 0],
+  ["a `\n\nb` @\n", 1],
+  ["- `literal\n- @\n- literal`\n", 1],
+  ["`one\n# two` @\n", 1],
+  ["    `a\n@ b`\n", 1],
+];
+
+test("Tek-747: the link count equals the CommonMark reference on every line form of the three differences", () => {
+  for (const [body, want] of CM_LINKS) {
+    const text = "# T\n\n> s\n\n## Docs\n\n" + body.replaceAll("@", "[l](https://example.com/a)");
+    const detail = byId(validateLlmsTxt(good(text)), "links").detail;
+    const m = /^(\d+) links?/.exec(detail);
+    assert.equal(m ? Number(m[1]) : 0, want, JSON.stringify(body) + " read as: " + detail);
+  }
+});
+
+test("Tek-747: the mask itself on the three differences", async () => {
+  const codeSpanMask = await loadMask();
+  const shown = (t: string) => Array.from(codeSpanMask(t), (v, i) => (v ? t[i] : "-")).join("");
+  // a heading line is a block of its own
+  assert.equal(shown("## a `\nb` c"), "-----------");
+  // an empty item and an ordered item that does not start at 1 continue the paragraph
+  assert.equal(shown("a `b\n*\nc` d"), "--`b\n*\nc`--");
+  assert.equal(shown("a `b\n2. c` d"), "--`b\n2. c`--");
+  // a lone hyphen is a setext underline, so the paragraph ends there
+  assert.equal(shown("a `b\n-\nc` d"), "-----------");
+  // the next item of an open list is a new block, and a marker indented into the open item is not
+  assert.equal(shown("1. a `b\n2. c` d"), "---------------");
+  assert.equal(shown("- a `b\n  2. c` d"), "----`b\n  2. c`--");
+  // a fence line inside a list item is masked whole, closed or not
+  assert.equal(shown("- a\n    ~~~\n    x\n    ~~~\nb"), "----    ~~~-    x-    ~~~--");
+  assert.equal(shown("- a\n    ```\n    x\nb"), "----    ```-    x--");
+});
+
+test("Tek-747: the block reader stays linear on nested markers and a deep item stack", async () => {
+  const codeSpanMask = await loadMask();
+  const fill = (s: string, n: number) => s.repeat(Math.ceil(n / s.length)).slice(0, n);
+  const shapes: [string, (n: number) => string][] = [
+    ["one line of nested bullets", (n) => fill("- ", n) + "x\n"],
+    ["one line of nested ordered items", (n) => fill("1. ", n) + "x\n"],
+    ["a deep item stack and indented lines", (n) => { let s = fill("- ", n / 2) + "x\n"; while (s.length < n) s += " ".repeat(200) + "y `\n"; return s; }],
+    ["marker-shaped lines in one paragraph", (n) => "x\n" + fill("14) a ` b\n", n)],
+  ];
+  const best = (text: string) => {
+    let min = Infinity;
+    for (let r = 0; r < 5; r++) {
+      const started = process.hrtime.bigint();
+      for (let i = 0; i < 5; i++) codeSpanMask(text);
+      min = Math.min(min, Number(process.hrtime.bigint() - started) / 1e6);
+    }
+    return min;
+  };
+  for (const [name, make] of shapes) {
+    const small = make(16 * 1024), large = make(128 * 1024);
+    best(large);
+    const ratio = best(large) / best(small);
+    const sizes = large.length / small.length;
+    assert.ok(ratio < sizes * 2, name + ": " + sizes.toFixed(1) + "x the input took " + ratio.toFixed(1) + "x as long");
+  }
+});
+
+test("Tek-747: the report's sentences end in a period and carry no semicolon", () => {
+  const report = (f: Parameters<typeof validateLlmsTxt>[0], id: string): string => byId(validateLlmsTxt(f), id).detail;
+  const head = "# T\n\n> s\n\n## Docs\n\n";
+  const link = "- [a](https://example.com/a)\n";
+  const rows: [string, string, string][] = [
+    ["h1-title", "#\n\n> s\n\n## Docs\n\n" + link, "the H1 has no text. The format requires the project name there"],
+    ["sections", "# T\n\n> s\n\n[a](https://example.com/a)\n", "no H2 sections found. Sections are the convention for grouping links"],
+    ["sections", head + "[a](https://example.com/a)\n", "1 section but no file list under any of them. The format puts a section's links in a markdown list"],
+    ["sections", "# T\n\n### Early\n\n> s\n\n## Docs\n\n" + link, "1 section, 1 carrying a file list. The heading at line 3 is out of place, because the format has one H1 and no other heading before the first H2"],
+    ["links", head + "- [](https://example.com/a)\n", "1 link, 1 with an empty link name. An entry needs a name an agent can show"],
+    ["links", head + link + "- [b](/rel)\n", "2 links, 1 relative. Absolute URLs travel better when the file is read out of context"],
+    ["links", head + link + "- [b](https://example.com/b: notes)\n", "1 link, all absolute URLs. 1 list line looks like a link entry but is not a Markdown link (line 8)"],
+    ["links", head + link + "\u2013 [b](https://example.com/b)\n", "2 links, all absolute URLs. 1 list line opens with a dash or bullet that is not a Markdown list marker (line 8)"],
+    ["no-html", head + link + "\n<div>x</div>\n", "HTML tags found. llms.txt should be plain markdown"],
+  ];
+  for (const [id, text, want] of rows) assert.equal(report(good(text), id), want);
+  assert.equal(report(good(head + link, { bytes: 200000 }), "size"), "200000 bytes. Consider moving detail to llms-full.txt");
+  assert.equal(report({ redirect: true, reason: "off-host", status: 301, location: "https://other.example/llms.txt" }, "http-status"), "redirects to https://other.example/llms.txt, a different host. llms.txt is host-scoped, so validate that host directly");
+  assert.equal(report({ redirect: true, reason: "unsafe-target", status: 301, location: "http://example.com/llms.txt" }, "http-status"), "redirects to an unsupported target (http://example.com/llms.txt). Only https redirects to the same site are followed");
+  assert.equal(report({ redirect: true, reason: "too-many", status: 301, location: "" }, "http-status"), "too many redirects. The llms.txt is not served at a stable URL");
+});
+
+// The disclosed gap in the README. commonmark.js finds one link in each of these files. fenceMask does not open the first fence, so it
+// opens one at the closing line and the real entry after it is skipped. The old copy gave the same answer when the fence held no link.
+test("Tek-747: a known gap, a closing line at 0 to 3 columns reads as a new opening fence", () => {
+  for (const body of ["- ```\n  a\n  ```\n", "- a\n    ```\n    b\n  ```\n", "- a\n\t```\n\tb\n  ```\n"]) {
+    const text = "# T\n\n> s\n\n## Docs\n\n" + body + "- [m](https://example.com/m)\n";
+    assert.equal(byId(validateLlmsTxt(good(text)), "links").detail, "no markdown links found", JSON.stringify(body));
+  }
 });

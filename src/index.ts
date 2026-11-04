@@ -292,34 +292,37 @@ function isEscaped(s: string, i: number): boolean {
 // span itself crosses a real line ending. V2 (Tek-526): a fenceless "`[a](b)\ncontinued`" was
 // masked only on its own line, so the second line escaped the mask and its bracket read as a
 // real link. A span opens with a run of backticks and closes with the next run of the same
-// length anywhere in the text; a pair that crosses a block boundary, a blank line (blank or
-// made only of spaces and tabs), a heading line or a new list item, is not a code span in
-// CommonMark, so it is left unmasked and its backticks stay literal (VREG2, round 3 Tek-542:
-// backticks in two different list items used to enclose a real hyperlink between them). Such a
-// pair consumes neither run: its closer is still free to open a span of its own in its own
+// length anywhere in the text. A pair in two different blocks, as inlineBlockReader reads them,
+// is not a code span in CommonMark, so it is left unmasked and its backticks stay literal (VREG2,
+// round 3 Tek-542: backticks in two different list items used to enclose a real hyperlink
+// between them). Such a pair consumes neither run: its closer is still free to open a span of its own in its own
 // block. Until 2026-11-04 the scan jumped past the closer, so a stray backtick moved the mask by
 // one run, a link inside the next real span counted as a link and text after it could count as
 // code (Tek-745). An escaped first backtick is literal and the rest of its run still opens, while
 // a closing run is never escaped, because a backslash inside a code span is literal. Each run
-// carries the number of boundary lines before it, read once per line, so comparing two runs
+// carries the number of its block, read once per line, so comparing two runs
 // costs nothing however far apart they sit. Runs are grouped by length and every group is read
 // with one forward pointer, so the scan stays linear on a document of unmatched runs. Mirrored
-// from the hosted validator at turva.dev in 0.5.1.
-function endsInlineBlock(line: string): boolean {
-  return /^[ \t]*$/.test(line) || /^ {0,3}(#{1,6}(?:[ \t]|$)|[-*+][ \t]|\d{1,9}[.)][ \t])/.test(line);
-}
+// from the hosted validator at turva.dev in 0.6.0.
 function codeSpanMask(text: string): Uint8Array {
   const mask = new Uint8Array(text.length);
   const runs: { at: number; len: number; escaped: boolean; block: number }[] = [];
+  const blockOf = inlineBlockReader();
   let block = 0;
+  const readLine = (from: number) => {
+    const next = text.indexOf("\n", from);
+    const end = next < 0 ? text.length : next;
+    block = blockOf(text.slice(from, end));
+    if (block < 0) mask.fill(1, from, end);
+  };
+  readLine(0);
   for (let i = 0; i < text.length; ) {
     if (text[i] === "\n") {
-      const next = text.indexOf("\n", i + 1);
-      if (endsInlineBlock(text.slice(i + 1, next < 0 ? text.length : next))) block++;
+      readLine(i + 1);
       i++;
       continue;
     }
-    if (text[i] !== "`") { i++; continue; }
+    if (text[i] !== "`" || block < 0) { i++; continue; }
     let j = i;
     while (j < text.length && text[j] === "`") j++;
     runs.push({ at: i, len: j - i, escaped: isEscaped(text, i), block });
@@ -343,6 +346,115 @@ function codeSpanMask(text: string): Uint8Array {
     k = list[p]!;
   }
   return mask;
+}
+
+// Which inline block each line belongs to, read once per line in document order, because two
+// backtick runs pair only inside one block. Measured against commonmark.js 0.31.2, Tek-747. A
+// blank line, an ATX heading, a thematic break and a setext underline end a paragraph, and the
+// next line starts a new block, so a backtick on a heading line never pairs with the next line. A
+// list marker starts a new block, with the exception CommonMark sets: a line that would continue
+// an open paragraph cannot open a list with an empty item or with a number other than 1. The
+// number is compared as a number, so "01." counts as 1. That exception holds only while the
+// paragraph is the innermost open container. A line indented less than an open item's content
+// column closes that item, so "2." there is the list's next item, which is why the reader keeps
+// the content column of every open item. An empty item followed by a blank line is closed. An
+// indented line continues an open paragraph, and a run of indented lines with no paragraph open is
+// one block, so backticks in it still pair. A fence this reader sees is one the caller did not
+// blank, because fenceMask reads only lines at 0 to 3 columns: a fence indented further inside a
+// list item, or opened on a marker line. For every line of such a fence the reader returns -1 and
+// the scan masks the line whole, so a fence hides what it holds whatever closes it and whichever
+// character it uses. A fence ends when an open item it sits in closes. Block quotes and HTML blocks
+// are not read here, neither the start of one nor the lines of a block quote. Every pattern runs at
+// a fixed position, the thematic break test and the closing fence test run once per line, and the
+// walk over the open items stops at the line's own width, so the reader stays linear however deep
+// the items nest.
+const INLINE_HEADING = /#{1,6}(?:[ \t]|$)/y;
+const INLINE_UNDERLINE = /(?:=+|-+)[ \t]*$/y;
+const INLINE_THEMATIC = /([-*_])(?:[ \t]*\1){2,}[ \t]*$/y;
+const INLINE_MARKER = /(?:[-*+]|(\d{1,9})[.)])(?=[ \t]|$)/y;
+const INLINE_FENCE = /(`{3,})[^`]*$|(~{3,})/y;
+function matchAt(re: RegExp, s: string, at: number): RegExpExecArray | null {
+  re.lastIndex = at;
+  return re.exec(s);
+}
+function inlineBlockReader(): (line: string) => number {
+  let block = 0, para = false, code = false, emptyItem = false;
+  let fenceChar = "", fenceLen = 0, fenceDepth = 0;
+  const items: number[] = [];
+  return (line) => {
+    let p = 0, col = 0;
+    const skipBlanks = () => {
+      for (; p < line.length; p++) {
+        if (line[p] === " ") col++;
+        else if (line[p] === "\t") col += 4 - (col % 4);
+        else break;
+      }
+    };
+    skipBlanks();
+    if (p === line.length) {
+      if (fenceChar !== "") return -1;
+      if (emptyItem) items.pop();
+      emptyItem = false;
+      para = false;
+      code = false;
+      return ++block;
+    }
+    emptyItem = false;
+    let depth = 0;
+    while (depth < items.length && col >= items[depth]!) depth++;
+    if (fenceChar !== "") {
+      if (depth >= fenceDepth) {
+        if (col - (fenceDepth > 0 ? items[fenceDepth - 1]! : 0) < 4) {
+          let end = p;
+          while (line[end] === fenceChar) end++;
+          if (end - p >= fenceLen && line.slice(end).trim() === "") fenceChar = "";
+        }
+        return -1;
+      }
+      fenceChar = "";
+    }
+    let inParagraph = para && depth === items.length;
+    let thematicRead = false;
+    for (;;) {
+      if (col - (depth > 0 ? items[depth - 1]! : 0) >= 4) {
+        if (para) return block;
+        items.length = depth;
+        if (code) return block;
+        code = true;
+        return ++block;
+      }
+      code = false;
+      if (matchAt(INLINE_HEADING, line, p)) { items.length = depth; para = false; return ++block; }
+      const fence = matchAt(INLINE_FENCE, line, p);
+      if (fence) {
+        items.length = depth;
+        para = false;
+        fenceChar = line[p]!;
+        fenceLen = (fence[1] || fence[2])!.length;
+        fenceDepth = depth;
+        return -1;
+      }
+      if (inParagraph && matchAt(INLINE_UNDERLINE, line, p)) { para = false; return block; }
+      if (!thematicRead && matchAt(INLINE_THEMATIC, line, p)) { items.length = depth; para = false; return ++block; }
+      thematicRead = true;
+      const marker = matchAt(INLINE_MARKER, line, p);
+      if (!marker) break;
+      p += marker[0].length;
+      col += marker[0].length;
+      const afterMarker = col;
+      skipBlanks();
+      const empty = p === line.length;
+      if (inParagraph && (empty || (marker[1] !== undefined && Number(marker[1]) !== 1))) break;
+      items.length = depth;
+      items.push(empty || col - afterMarker >= 5 ? afterMarker + 1 : col);
+      depth = items.length;
+      para = false;
+      inParagraph = false;
+      if (empty) { emptyItem = true; return block; }
+    }
+    if (!para) { items.length = depth; para = true; block++; }
+    return block;
+  };
 }
 
 // A CommonMark link reference label is matched without regard to case or the exact run of
@@ -763,8 +875,8 @@ function entryLineList(hits: number[]): string {
 }
 function unparsedEntriesNote(found: { unparsed: number[]; marker: number[] }): string {
   const u = found.unparsed.length, k = found.marker.length;
-  return (u > 0 ? "; " + (u === 1 ? "1 list line looks like a link entry but is not a Markdown link" : u + " list lines look like link entries but are not Markdown links") + entryLineList(found.unparsed) : "")
-    + (k > 0 ? "; " + (k === 1 ? "1 list line opens with a dash or bullet that is not a Markdown list marker" : k + " list lines open with a dash or bullet that is not a Markdown list marker") + entryLineList(found.marker) : "");
+  return (u > 0 ? ". " + (u === 1 ? "1 list line looks like a link entry but is not a Markdown link" : u + " list lines look like link entries but are not Markdown links") + entryLineList(found.unparsed) : "")
+    + (k > 0 ? ". " + (k === 1 ? "1 list line opens with a dash or bullet that is not a Markdown list marker" : k + " list lines open with a dash or bullet that is not a Markdown list marker") + entryLineList(found.marker) : "");
 }
 
 // The text of an ATX H1, or null when the line is not one. One to three leading spaces, a
@@ -801,9 +913,9 @@ function isAbsoluteHttpUrl(t: string): boolean {
 }
 
 function redirectFailDetail(f: FetchRedirect): string {
-  if (f.reason === "off-host") return "redirects to " + f.location + ", a different host; llms.txt is host-scoped, so validate that host directly";
-  if (f.reason === "unsafe-target") return "redirects to an unsupported target (" + f.location + "); only https redirects to the same site are followed";
-  if (f.reason === "too-many") return "too many redirects; the llms.txt is not served at a stable URL";
+  if (f.reason === "off-host") return "redirects to " + f.location + ", a different host. llms.txt is host-scoped, so validate that host directly";
+  if (f.reason === "unsafe-target") return "redirects to an unsupported target (" + f.location + "). Only https redirects to the same site are followed";
+  if (f.reason === "too-many") return "too many redirects. The llms.txt is not served at a stable URL";
   return "got a " + f.status + " redirect without a usable Location header";
 }
 
@@ -862,7 +974,7 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
   if (title || setext) {
     add("h1-title", "pass", "Starts with an H1 title", JSON.stringify(cut(first, 80)));
   } else if (title === "") {
-    add("h1-title", "fail", "Starts with an H1 title", "the H1 has no text; the format requires the project name there");
+    add("h1-title", "fail", "Starts with an H1 title", "the H1 has no text. The format requires the project name there");
   } else {
     add("h1-title", "fail", "Starts with an H1 title", "the first non-empty line should be a markdown H1 (# Site name, or one line of text underlined with =)");
   }
@@ -1010,14 +1122,14 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
   if (h2Count > 0 && sectionsWithList > 0) {
     add("sections", "pass", "H2 sections group the content", h2Count + " section" + (h2Count === 1 ? "" : "s") + ", " + sectionsWithList + " carrying a file list");
   } else if (h2Count > 0) {
-    add("sections", "warn", "H2 sections group the content", h2Count + " section" + (h2Count === 1 ? "" : "s") + " but no file list under any of them; the format puts a section's links in a markdown list");
+    add("sections", "warn", "H2 sections group the content", h2Count + " section" + (h2Count === 1 ? "" : "s") + " but no file list under any of them. The format puts a section's links in a markdown list");
   } else {
-    add("sections", "warn", "H2 sections group the content", "no H2 sections found; sections are the convention for grouping links");
+    add("sections", "warn", "H2 sections group the content", "no H2 sections found. Sections are the convention for grouping links");
   }
   if (misplaced !== -1) {
     const s = checks[checks.length - 1]!;
     s.status = "warn";
-    s.detail += "; the heading at line " + (misplaced + 1) + " is out of place, because the format has one H1 and no other heading before the first H2";
+    s.detail += ". The heading at line " + (misplaced + 1) + " is out of place, because the format has one H1 and no other heading before the first H2";
   }
   // Links are collected from the prose only, for the same reason the headings are: a link
   // shown inside a code fence is an example of a link, not one an agent can follow. Computed
@@ -1031,13 +1143,13 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
   if (links.length === 0) {
     add("links", "warn", "Markdown links an agent can follow", "no markdown links found");
   } else if (unnamed > 0) {
-    add("links", "warn", "Markdown links an agent can follow", links.length + " link" + (links.length === 1 ? "" : "s") + ", " + unnamed + " with an empty link name; an entry needs a name an agent can show");
+    add("links", "warn", "Markdown links an agent can follow", links.length + " link" + (links.length === 1 ? "" : "s") + ", " + unnamed + " with an empty link name. An entry needs a name an agent can show");
   } else if (absolute === named.length) {
     add("links", "pass", "Markdown links an agent can follow", named.length + " link" + (named.length === 1 ? "" : "s") + ", all absolute URLs");
   } else {
     const relativeCount = named.filter((m) => !/^[a-z][a-z0-9+.-]*:/i.test(m.target)).length;
     const hostless = named.length - absolute - relativeCount;
-    add("links", "warn", "Markdown links an agent can follow", named.length + " links, " + relativeCount + " relative" + (hostless > 0 ? " and " + hostless + " that are not valid http or https URLs" : "") + "; absolute URLs travel better when the file is read out of context");
+    add("links", "warn", "Markdown links an agent can follow", named.length + " links, " + relativeCount + " relative" + (hostless > 0 ? " and " + hostless + " that are not valid http or https URLs" : "") + ". Absolute URLs travel better when the file is read out of context");
   }
   // A list line that looks like a link entry but is not one (Tek-730) turns the links check to a warn.
   const lookalikes = unparsedLinkEntries(lines, fenced, new Set(proseLinks.map((m) => m.at)));
@@ -1051,7 +1163,7 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
   } else if (f.bytes <= 51200) {
     add("size", "pass", "Small enough to be cheap to read", f.bytes + " bytes");
   } else {
-    add("size", "warn", "Small enough to be cheap to read", f.bytes + " bytes; consider moving detail to llms-full.txt");
+    add("size", "warn", "Small enough to be cheap to read", f.bytes + " bytes. Consider moving detail to llms-full.txt");
   }
   // A tag needs its closing ">" (Tek-560): an opening tag with well formed attributes, a closing tag
   // or a comment start. "a <b + c" is prose and no longer warns. An attribute name is any run of
@@ -1064,7 +1176,7 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
   // string inside an inline code span, a fenced block or after a backslash is not markup.
   const htmlScan = blankCodeForHtml(proseText);
   if (/<[a-zA-Z][a-zA-Z0-9-]*(?:\s+[^\s"'<>\/=\p{L}\p{N}_]*[\p{L}\p{N}_][^\s"'<>\/=]*(?:\s*=\s*(?:"[^"]*"|'[^']*'|(?!["'])[^\s<>]+))?)*\s*\/?>|<\/[a-zA-Z][a-zA-Z0-9-]*\s*>|<!--/u.test(htmlScan)) {
-    add("no-html", "warn", "No HTML markup in the file", "HTML tags found; llms.txt should be plain markdown");
+    add("no-html", "warn", "No HTML markup in the file", "HTML tags found. llms.txt should be plain markdown");
   } else {
     add("no-html", "pass", "No HTML markup in the file", "plain markdown");
   }
