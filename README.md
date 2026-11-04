@@ -103,7 +103,7 @@ In an error report the `target` is the address given on the command line. When i
 | 3 | First non-empty line is a Markdown H1, written `# Title` or as one line of text underlined with `=` | Missing H1, a title indented as a code block, or an H1 with no text | none |
 | 4 | Blockquote summary follows the title | none | Missing summary, a blockquote block in which no line has text after the `>`, or a blockquote after other text but before the first H2, named by its line |
 | 5 | H2 sections group the content | none | No H2 sections, no section with a Markdown link list, a heading between the title and the first H2, or a second H1 |
-| 6 | Markdown links have names and absolute HTTP or HTTPS targets | none | Missing links, empty names, relative targets or targets that do not parse as HTTP or HTTPS URLs, or a list line under an H2 that looks like a link entry but is not a Markdown link: an unclosed destination such as `- [Name](https://example.com/a.md: notes)`, or an en dash, an em dash or a bullet in place of the list marker. The detail gives the count and the first five line numbers |
+| 6 | Markdown links have names and absolute HTTP or HTTPS targets | none | Missing links, empty names, relative targets or targets that do not parse as HTTP or HTTPS URLs, or a list line under an H2 of one of two kinds. The first kind looks like a link entry but is not a Markdown link, such as an unclosed destination in `- [Name](https://example.com/a.md: notes)`. The second kind opens with an en dash, an em dash or a bullet instead of a list marker, whether or not its link parses. The detail has one sentence per kind, each with its count and the first five line numbers |
 | 7 | File is small enough to read cheaply | none | Over 50 KiB, which is 51,200 bytes, or truncated at the 256 KiB read limit |
 | 8 | File contains no HTML markup | none | An opening tag with its closing `>`, a closing tag or an HTML comment is found in the prose. Inline code spans, fenced code and backslash-escaped angle brackets such as `\<node-name\>` are not read, so `<endpoint-id>` in a code span does not warn. An attribute name is any run of characters other than white space, quotes, `<`, `>`, `/` and `=` that holds a Unicode letter, a Unicode digit or the character `_`, so `<div @click="x">` warns. Autolinks such as `<https://example.com>` and prose such as `a <b + c` are not tags. A tag still open at the end of the file, such as `<div class="x"`, has no closing `>` and does not warn |
 
@@ -142,7 +142,7 @@ These checks are labelled **v2** in the output. They look for link relations in 
 | 9 | Home page points to its llms.txt | `rel="describedby"` has a non-empty target | `info` |
 | 10 | Home page points to a Markdown version | `rel="alternate"` has media type `text/markdown` and a non-empty target | `info` |
 
-The validator detects these declarations without fetching their targets. It reads the first 65,536 UTF-16 code units of the head after comments and the contents of script, style, title, noscript, noframes and template elements have been set aside. When a relation is missing from a longer head, the result says that only that part was read. A target is shown with its credentials and fragment removed and its query values masked.
+The validator detects these declarations without fetching their targets. It reads the first 65,536 UTF-16 code units of the head after comments and the contents of script, style, title, noscript, noframes and template elements have been set aside. When a relation is missing from a longer head, the result says that only that part was read. The home page itself is read up to 256 KiB. When it was cut there and no relation is found in the part that was read, the info text says "in the first 256 KiB of the home page, the part that was read, or in the Link header". A target is shown with its credentials and fragment removed and its query values masked.
 
 The validator does not follow the links inside `llms.txt`, crawl the site or test whether an AI agent can complete a task there.
 
@@ -187,7 +187,7 @@ Any CI runner with Node.js 22 or newer can run the same command. Omit `--strict`
 The default validation requests two documents: `https://<host>/llms.txt` and `https://<host>/`. Redirects may add requests, but linked pages and discovery targets are never fetched. The validator stores no results.
 
 - Timeout: eight seconds per document, shared across its redirect chain.
-- Read limit: 256 KiB, which is 262,144 bytes, per response.
+- Read limit: 256 KiB, which is 262,144 bytes, per response. A file cut there gets the size note "over 256 KiB, read truncated".
 - Redirects: up to four hops, over HTTPS, to the same host or its `www`/apex equivalent. Off-site redirects, embedded credentials and unsupported ports are rejected. A redirect target is reported with its credentials and fragment removed and its query values masked, whether the redirect was followed or rejected.
 - Host checks: IP literals, bracketed IPv6 addresses, localhost and the internal-use TLDs `localdomain`, `local`, `internal`, `home`, `lan`, `corp`, `test`, `invalid`, `arpa` and `onion` are rejected before a request is sent. An address that holds `@`, `?` or `#` is not repeated in the error message, because it can carry a user name, a password or a query value. One trailing dot on the host you give, as in `example.com.`, is removed first. Redirect targets are checked too.
 
@@ -212,10 +212,10 @@ The strict type check found two inputs that could leave `undefined` in a check's
 GitHub Actions publishes every version from 0.1.3 on with npm trusted publishing, and each one carries a provenance attestation. To check one, install it in an empty directory and ask npm to verify the signatures. Replace the version with the one you want to check.
 
 ```sh
-mkdir verify-llms && cd verify-llms && npm init -y && npm install turva-llms-txt-validator@0.5.0 --ignore-scripts && npm audit signatures
+mkdir verify-llms && cd verify-llms && npm init -y && npm install turva-llms-txt-validator@0.5.1 --ignore-scripts && npm audit signatures
 ```
 
-`npm audit signatures` checks the registry signature and the provenance attestation of each installed package that has one. The attestation of this package names three things to compare with what you expect: the repository `github.com/erekola/llms-txt-validator`, the workflow file `.github/workflows/publish.yml` and the commit that produced the tarball. The npm version page shows them under Provenance. Tag `v0.5.0` must point at that same commit, and `gh api repos/erekola/llms-txt-validator/commits/v0.5.0 --jq .sha` prints it. A mismatch is a reason not to use that version. Provenance proves which workflow built a release and from which commit. It does not prove that the code is safe, so reading the source and the dependencies stays your job.
+`npm audit signatures` checks the registry signature and the provenance attestation of each installed package that has one. The attestation of this package names three things to compare with what you expect: the repository `github.com/erekola/llms-txt-validator`, the workflow file `.github/workflows/publish.yml` and the commit that produced the tarball. The npm version page shows them under Provenance. Tag `v0.5.1` must point at that same commit, and `gh api repos/erekola/llms-txt-validator/commits/v0.5.1 --jq .sha` prints it. A mismatch is a reason not to use that version. Provenance proves which workflow built a release and from which commit. It does not prove that the code is safe, so reading the source and the dependencies stays your job.
 
 ## Development
 

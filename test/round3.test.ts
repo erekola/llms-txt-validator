@@ -6,6 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { validateLlmsTxt, summarizeChecks, validateHost, maskLocation } from "../src/index.js";
 import type { FetchedLlmsTxt, LlmsCheck } from "../src/index.js";
 
@@ -186,4 +187,173 @@ test("V10-P3-01: the input-path check's value and detail are separate fields", a
       "This path is not used, because the validator always reads /llms.txt at the root of the host."
     );
   } finally { globalThis.fetch = orig; }
+});
+
+// --- Tek-745 K9 (0.5.1): a backtick pair that crosses a block boundary no longer consumes its closer, so the
+// closer can open a span of its own in its own block. Before, the scan jumped past the closer: a stray
+// backtick in one block moved the mask by one run, a link inside the next real span counted as a link
+// (C-01, a false pass) and a real link after a lone backtick in a list item could be read as code (N3, a
+// false warn). The hosted validator carries the same cases in test/llms-validator-round3.test.ts.
+const BSL = String.fromCharCode(92);
+const p745 = "# T\n\n> Summary\n\n## Docs\n\n";
+const linksCheck = (text: string) => { const c = byId(validateLlmsTxt(good(text)), "links"); return c.status + " | " + c.detail; };
+
+// codeSpanMask is not exported, so the compiled module is copied next to itself, in dist/src, with one export
+// added. It has to sit there because the module reads package.json relative to its own folder.
+let maskCache: ((text: string) => Uint8Array) | null = null;
+async function loadMask(): Promise<(text: string) => Uint8Array> {
+  if (maskCache) return maskCache;
+  const indexUrl = new URL("../src/index.js", import.meta.url);
+  const copy = new URL("../src/index-with-mask-" + process.pid + ".mjs", import.meta.url);
+  writeFileSync(copy, readFileSync(indexUrl, "utf8") + "\nexport { codeSpanMask };\n");
+  try {
+    const mod = await import(copy.href);
+    maskCache = mod.codeSpanMask as (text: string) => Uint8Array;
+    return maskCache;
+  } finally {
+    rmSync(copy, { force: true });
+  }
+}
+
+test("Tek-745 C-01: a stray backtick in an earlier block does not move the mask onto the next real span", () => {
+  const stray = linksCheck(p745 + "`\n\n`[Guide](https://example.com/guide)`\n");
+  const control = linksCheck(p745 + "`[Guide](https://example.com/guide)`\n");
+  assert.equal(control, "warn | no markdown links found");
+  assert.equal(stray, control);
+});
+
+test("Tek-745 N3: a lone backtick at the end of one list item does not turn the next item's real span and text into code", () => {
+  const text = "# T\n\n> s\n\n## Docs\n\n- [A](https://example.com/a) `\n- see `[B](/relative)` here\n";
+  assert.equal(linksCheck(text), "pass | 1 link, all absolute URLs");
+});
+
+test("Tek-745: what must not change when the closer stays free", () => {
+  // a real link after a lone backtick in another block still counts
+  assert.equal(linksCheck(p745 + "- [A](https://example.com/a) `x\n\n[B](https://example.com/b) and `y`\n"), "pass | 2 links, all absolute URLs");
+  // a real span inside one block still masks its link text
+  assert.equal(linksCheck(p745 + "- [A](https://example.com/a) `[B](https://example.com/b)`\n"), "pass | 1 link, all absolute URLs");
+  // a span across a soft line break inside one paragraph still masks
+  assert.equal(linksCheck(p745 + "`one\n[B](https://example.com/b) two`\n"), "warn | no markdown links found");
+  // an unclosed run stays literal
+  assert.equal(linksCheck(p745 + "- [A](https://example.com/a) `x [B](https://example.com/b)\n"), "pass | 2 links, all absolute URLs");
+  // a double-backtick span holds a single backtick and masks to its closing run
+  assert.equal(linksCheck(p745 + "- [A](https://example.com/a) ``x`y [B](https://example.com/b)``\n- [C](https://example.com/c)\n"), "pass | 2 links, all absolute URLs");
+  // VREG2: backticks in two list items still enclose no real link between them
+  assert.equal(linksCheck(p745 + "- `literal\n- [Guide](https://example.com/guide)\n- literal`\n"), "pass | 1 link, all absolute URLs");
+});
+
+test("Tek-745: the mask itself, run by run", async () => {
+  const codeSpanMask = await loadMask();
+  const shown = (t: string) => Array.from(codeSpanMask(t), (v, i) => (v ? t[i] : "-")).join("");
+  // the closer of a crossing pair opens its own span in its own block
+  assert.equal(shown("a `\n\nb `c` d"), "-------`c`--");
+  assert.equal(shown("`one\ntwo`"), "`one\ntwo`");
+  assert.equal(shown("`one\n\ntwo`"), "----------");
+  assert.equal(shown("``a`b`` c"), "``a`b``--");
+  assert.equal(shown("x ` y"), "-----");
+  // an escaped first backtick is literal, the rest of its run still opens
+  assert.equal(shown(BSL + "``a` b"), "--`a`--");
+});
+
+// The old decision, kept here as the reference the block counters are compared with.
+function crossesBlockBoundary(text: string, start: number, end: number): boolean {
+  const inner = text.slice(start, end);
+  if (/\n[ \t]*\n/.test(inner)) return true;
+  const lines = inner.split("\n");
+  for (let i = 1; i < lines.length; i++) {
+    if (/^ {0,3}(#{1,6}(?:[ \t]|$)|[-*+][ \t]|\d{1,9}[.)][ \t])/.test(lines[i]!)) return true;
+  }
+  return false;
+}
+// The same scan as codeSpanMask with the new rule (a crossing pair consumes nothing) but the decision
+// taken by the old function for every candidate, written the plain way with no counters and no pointers.
+function referenceMask(text: string): Uint8Array {
+  const mask = new Uint8Array(text.length);
+  const runs: { at: number; len: number; escaped: boolean }[] = [];
+  for (let i = 0; i < text.length; ) {
+    if (text[i] !== "`") { i++; continue; }
+    let j = i;
+    while (j < text.length && text[j] === "`") j++;
+    let n = 0;
+    for (let b = i - 1; b >= 0 && text[b] === BSL; b--) n++;
+    runs.push({ at: i, len: j - i, escaped: n % 2 === 1 });
+    i = j;
+  }
+  for (let k = 0; k < runs.length; k++) {
+    const r = runs[k]!;
+    const len = r.escaped ? r.len - 1 : r.len;
+    if (len <= 0) continue;
+    let m = k + 1;
+    while (m < runs.length && runs[m]!.len !== len) m++;
+    if (m === runs.length) continue;
+    const start = r.escaped ? r.at + 1 : r.at;
+    const end = runs[m]!.at + runs[m]!.len;
+    if (crossesBlockBoundary(text, start, end)) continue;
+    mask.fill(1, start, end);
+    k = m;
+  }
+  return mask;
+}
+
+// mulberry32, so a failure is reproducible from the seed in its message
+function seeded(seed: number) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+test("Tek-745: the block counters decide every pair as the old function did, on 3000 generated texts", async () => {
+  const codeSpanMask = await loadMask();
+  const parts = ["`", "``", "```", BSL + "`", "word", " ", "  ", "\t", "\n", "\n", "\n\n", "\n   \n", "\n# h\n", "\n## ", "\n- item ", "\n* ", "\n+ x", "\n1. n ", "\n12) m ", "\n    - indented ", "\n#nohash ", "[a](b)", "x"];
+  const rnd = seeded(745);
+  let withSpans = 0, crossing = 0;
+  for (let n = 0; n < 3000; n++) {
+    const count = 1 + Math.floor(rnd() * 24);
+    let text = "";
+    for (let i = 0; i < count; i++) text += parts[Math.floor(rnd() * parts.length)]!;
+    const got = codeSpanMask(text), want = referenceMask(text);
+    assert.deepEqual(Array.from(got), Array.from(want), "text " + JSON.stringify(text) + " (seed 745, case " + n + ")");
+    if (got.some((v) => v === 1)) withSpans++;
+    if (/`[^`]*\n[^`]*`/.test(text)) crossing++;
+  }
+  // the generator has to reach both outcomes, or the comparison proves nothing
+  assert.ok(withSpans > 100 && crossing > 300, withSpans + " texts with a span, " + crossing + " with a backtick pair over a line break");
+});
+
+// A fixed time limit once passed here and failed on a slower CI runner (mds/gotchas.md 2026-09-27
+// (jatko 3)), so growth is compared: lengths 1..K are opened in order, a blank line follows and they are
+// closed in reverse, so every one of the K pairs spans most of the document and crosses a block
+// boundary. The mask with block counters grows with the input; calling the old function for each pair
+// grew about three to four times faster than the input.
+test("Tek-745: the mask stays linear when many nested pairs all cross a block boundary", async () => {
+  const codeSpanMask = await loadMask();
+  const nested = (K: number) => {
+    let s = "# T\n\n> s\n\n## Docs\n\n";
+    for (let L = 1; L <= K; L++) s += "`".repeat(L) + " ";
+    s += "\n\n";
+    for (let L = K; L >= 1; L--) s += "`".repeat(L) + " ";
+    return s + "\n";
+  };
+  const best = (text: string) => {
+    let min = Infinity;
+    for (let r = 0; r < 15; r++) {
+      const started = process.hrtime.bigint();
+      for (let i = 0; i < 10; i++) codeSpanMask(text);
+      min = Math.min(min, Number(process.hrtime.bigint() - started) / 1e6);
+    }
+    return min;
+  };
+  const small = nested(96), large = nested(480);
+  assert.ok(large.length > 200 * 1024 && large.length < 256 * 1024, "the large input is 256 KiB class: " + large.length);
+  // every pair crosses, so nothing is masked and nothing is consumed
+  assert.equal(codeSpanMask(large).some((v) => v === 1), false);
+  best(large);
+  const ratio = best(large) / best(small);
+  const sizes = large.length / small.length;
+  assert.ok(ratio < sizes * 1.5, sizes.toFixed(1) + "x the input took " + ratio.toFixed(1) + "x as long");
 });

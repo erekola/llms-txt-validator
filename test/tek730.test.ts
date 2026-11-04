@@ -65,7 +65,7 @@ test("A: the blanking stays linear on a document of unmatched backticks and brac
 test("B: a link entry with an unclosed destination warns in the links check", () => {
   const nbdev = base + "- [Blogging](https://nbdev.fast.ai/tutorials/blogging.html.md: Creating a blog with notebooks)\n";
   assert.equal(status(nbdev, "links"), "warn");
-  assert.equal(detail(nbdev, "links"), "1 link, all absolute URLs; 1 list line looks like a link entry but is not a Markdown link, so an agent will not follow it (line 8)");
+  assert.equal(detail(nbdev, "links"), "1 link, all absolute URLs; 1 list line looks like a link entry but is not a Markdown link (line 8)");
   assert.equal(run(nbdev).length, run(base).length);
 });
 
@@ -73,15 +73,15 @@ test("B: an entry that starts with an en dash, an em dash or a bullet warns", ()
   for (const mark of [EN, EM, BULLET]) {
     const t = base + mark + " [Saleor is composable](https://saleor.io/docs/composable)\n";
     assert.equal(status(t, "links"), "warn", mark);
-    assert.match(detail(t, "links"), /1 list line looks like a link entry/, mark);
+    assert.match(detail(t, "links"), /1 list line opens with a dash or bullet that is not a Markdown list marker \(line 8\)$/, mark);
   }
   const two = base + EN + " [A](https://example.com/a)\n" + EN + " [B](https://example.com/b)\n";
-  assert.equal(detail(two, "links"), "3 links, all absolute URLs; 2 list lines look like link entries but are not Markdown links, so an agent will not follow them (lines 8, 9)");
+  assert.equal(detail(two, "links"), "3 links, all absolute URLs; 2 list lines open with a dash or bullet that is not a Markdown list marker (lines 8, 9)");
 });
 
 test("B: the detail names the first five lines and counts the rest", () => {
   const many = base + Array.from({ length: 7 }, (_, i) => EN + " [E" + i + "](https://example.com/" + i + ")\n").join("");
-  assert.match(detail(many, "links"), /7 list lines look like link entries but are not Markdown links, so an agent will not follow them \(lines 8, 9, 10, 11, 12 and 2 more\)$/);
+  assert.match(detail(many, "links"), /7 list lines open with a dash or bullet that is not a Markdown list marker \(lines 8, 9, 10, 11, 12 and 2 more\)$/);
 });
 
 test("B: a valid entry, a numbered entry and a task box do not warn", () => {
@@ -112,5 +112,22 @@ test("B: only lines under an H2 and outside fences are read", () => {
 
 test("B: an unclosed entry in a file with no other link is one warning, not a second check", () => {
   const lone = "# Example\n\n> Summary.\n\n## Docs\n\n- [Blogging](https://nbdev.fast.ai/b.md: notes)\n";
-  assert.equal(detail(lone, "links"), "no markdown links found; 1 list line looks like a link entry but is not a Markdown link, so an agent will not follow it (line 7)");
+  assert.equal(detail(lone, "links"), "no markdown links found; 1 list line looks like a link entry but is not a Markdown link (line 7)");
+});
+
+// Tek-745 K10a (0.5.1): the note has two kinds. A look-alike marker is no list item whether or not its
+// link parses, and when the link parses it is counted as a link, so "will not follow it" was wrong for it.
+test("K10a: a look-alike marker with a link that parses is counted and named as a marker, not as a broken link", () => {
+  const one = "# Example\n\n> Summary.\n\n## Docs\n\n" + EN + " [B](https://example.com/b)\n";
+  assert.equal(status(one, "links"), "warn");
+  assert.equal(detail(one, "links"), "1 link, all absolute URLs; 1 list line opens with a dash or bullet that is not a Markdown list marker (line 7)");
+});
+
+test("K10a: a file with both kinds gives both notes, the broken link first", () => {
+  const both = base + "- [Bad](https://example.com/b: notes)\n" + EM + " [X](https://example.com/x)\n" + BULLET + " [Y](https://example.com/y)\n";
+  assert.equal(status(both, "links"), "warn");
+  assert.equal(detail(both, "links"),
+    "3 links, all absolute URLs; 1 list line looks like a link entry but is not a Markdown link (line 8); 2 list lines open with a dash or bullet that is not a Markdown list marker (lines 9, 10)");
+  const none = detail(base + "- [Bad](https://example.com/b: notes)\n" + EN + " [X](https://example.com/x)\n", "links");
+  assert.doesNotMatch(none, /agent will not follow/);
 });

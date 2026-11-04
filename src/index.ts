@@ -28,6 +28,7 @@ export type LinkRelations = {
   describedby: string | null;
   markdown: string | null;
   headCut?: boolean;
+  readCut?: boolean;
 };
 export type FetchedLlmsTxt = {
   redirect?: undefined;
@@ -208,7 +209,7 @@ export function isValidPublicHost(host: string | null | undefined): boolean {
 
 // opts.path and opts.accept were added for the v2 discovery checks, which need the
 // site's home page as well as its llms.txt. Nothing else moved: the redirect budget,
-// the same-host rule, the credential and port rejections and the 256 KB cap are the
+// the same-host rule, the credential and port rejections and the 256 KiB cap are the
 // guards this function was measured against.
 export async function fetchLlmsTxt(host: string, opts: FetchOptions = {}): Promise<FetchedLlmsTxt | FetchRedirect> {
   const timeoutMs = opts.timeoutMs ?? 8000;
@@ -288,34 +289,40 @@ function isEscaped(s: string, i: number): boolean {
 
 // Inline code spans, marked per character across the whole document, so a link written inside
 // backticks is read as the code it is (outside audit 2026-09-26, Tek-496), including when the
-// span itself crosses a real line ending: a fenceless "`[a](b)\ncontinued`" used to be masked
-// only on its own line, so the second line escaped the mask and its bracket read as a real link
-// (outside review 2026-09-28). A span opens with a run of backticks and closes with the next run
-// of the same length anywhere in the text; a pair that crosses a block boundary, a blank line
-// (blank or made only of spaces and tabs), a heading line or a new list item, is not a code span
-// in CommonMark, so it is left unmasked and its backticks stay literal (VREG2, round 3 Tek-542:
-// backticks in two different list items used to enclose a real hyperlink between them). An
-// escaped first backtick is literal and the rest of its run still opens, while a closing run is
-// never escaped, because a backslash inside a code span is literal. Runs are grouped by length
-// and every group is read with one forward pointer, so the scan stays linear on a document of
-// unmatched runs.
-function crossesBlockBoundary(text: string, start: number, end: number): boolean {
-  const inner = text.slice(start, end);
-  if (/\n[ \t]*\n/.test(inner)) return true;
-  const lines = inner.split("\n");
-  for (let i = 1; i < lines.length; i++) {
-    if (/^ {0,3}(#{1,6}(?:[ \t]|$)|[-*+][ \t]|\d{1,9}[.)][ \t])/.test(lines[i]!)) return true;
-  }
-  return false;
+// span itself crosses a real line ending. V2 (Tek-526): a fenceless "`[a](b)\ncontinued`" was
+// masked only on its own line, so the second line escaped the mask and its bracket read as a
+// real link. A span opens with a run of backticks and closes with the next run of the same
+// length anywhere in the text; a pair that crosses a block boundary, a blank line (blank or
+// made only of spaces and tabs), a heading line or a new list item, is not a code span in
+// CommonMark, so it is left unmasked and its backticks stay literal (VREG2, round 3 Tek-542:
+// backticks in two different list items used to enclose a real hyperlink between them). Such a
+// pair consumes neither run: its closer is still free to open a span of its own in its own
+// block. Until 2026-11-04 the scan jumped past the closer, so a stray backtick moved the mask by
+// one run, a link inside the next real span counted as a link and text after it could count as
+// code (Tek-745). An escaped first backtick is literal and the rest of its run still opens, while
+// a closing run is never escaped, because a backslash inside a code span is literal. Each run
+// carries the number of boundary lines before it, read once per line, so comparing two runs
+// costs nothing however far apart they sit. Runs are grouped by length and every group is read
+// with one forward pointer, so the scan stays linear on a document of unmatched runs. Mirrored
+// from the hosted validator at turva.dev in 0.5.1.
+function endsInlineBlock(line: string): boolean {
+  return /^[ \t]*$/.test(line) || /^ {0,3}(#{1,6}(?:[ \t]|$)|[-*+][ \t]|\d{1,9}[.)][ \t])/.test(line);
 }
 function codeSpanMask(text: string): Uint8Array {
   const mask = new Uint8Array(text.length);
-  const runs: { at: number; len: number; escaped: boolean }[] = [];
+  const runs: { at: number; len: number; escaped: boolean; block: number }[] = [];
+  let block = 0;
   for (let i = 0; i < text.length; ) {
+    if (text[i] === "\n") {
+      const next = text.indexOf("\n", i + 1);
+      if (endsInlineBlock(text.slice(i + 1, next < 0 ? text.length : next))) block++;
+      i++;
+      continue;
+    }
     if (text[i] !== "`") { i++; continue; }
     let j = i;
     while (j < text.length && text[j] === "`") j++;
-    runs.push({ at: i, len: j - i, escaped: isEscaped(text, i) });
+    runs.push({ at: i, len: j - i, escaped: isEscaped(text, i), block });
     i = j;
   }
   const byLen = new Map<number, number[]>();
@@ -331,9 +338,8 @@ function codeSpanMask(text: string): Uint8Array {
     ptr.set(len, p);
     if (p === list.length) continue;
     const close = runs[list[p]!]!;
-    const start = r.escaped ? r.at + 1 : r.at;
-    const end = close.at + close.len;
-    if (!crossesBlockBoundary(text, start, end)) mask.fill(1, start, end);
+    if (close.block !== r.block) continue;
+    mask.fill(1, r.escaped ? r.at + 1 : r.at, close.at + close.len);
     k = list[p]!;
   }
   return mask;
@@ -726,9 +732,11 @@ function blankCodeForHtml(prose: string): string {
 // period or a parenthesis) or one of the three look-alike markers, then white space and "[", and
 // no link that collectLinks found starts at that "[". A line with one of the three look-alike
 // markers counts whether or not its link parses, because it is no list item either way. A task
-// list box such as "- [x] done" is not an entry. Returns the one-based line numbers.
-function unparsedLinkEntries(lines: string[], fenced: boolean[], linkAt: Set<number>): number[] {
-  const hits: number[] = [];
+// list box such as "- [x] done" is not an entry. Returns the one-based line numbers by kind,
+// because the two kinds need different words: a look-alike marker with a link that parses is
+// counted as a link and is still no list item (Tek-745).
+function unparsedLinkEntries(lines: string[], fenced: boolean[], linkAt: Set<number>): { unparsed: number[]; marker: number[] } {
+  const unparsed: number[] = [], marker: number[] = [];
   const h2 = h2Lines(lines, fenced).h2;
   let inH2 = false, offset = 0;
   for (let i = 0; i < lines.length; i++) {
@@ -744,13 +752,19 @@ function unparsedLinkEntries(lines: string[], fenced: boolean[], linkAt: Set<num
     const alt = /^[ \t]*[\u2013\u2014\u2022]/.test(l);
     const bracketAt = m[0].length - 1;
     if (/^\[[ xX]\](?:[ \t]|$)/.test(l.slice(bracketAt))) continue;
-    if (alt || !linkAt.has(start + bracketAt)) hits.push(i + 1);
+    if (alt) marker.push(i + 1);
+    else if (!linkAt.has(start + bracketAt)) unparsed.push(i + 1);
   }
-  return hits;
+  return { unparsed, marker };
 }
-function unparsedEntriesNote(hits: number[]): string {
+function entryLineList(hits: number[]): string {
   const n = hits.length;
-  return "; " + (n === 1 ? "1 list line looks like a link entry but is not a Markdown link, so an agent will not follow it" : n + " list lines look like link entries but are not Markdown links, so an agent will not follow them") + " (line" + (n === 1 ? "" : "s") + " " + hits.slice(0, 5).join(", ") + (n > 5 ? " and " + (n - 5) + " more" : "") + ")";
+  return " (line" + (n === 1 ? "" : "s") + " " + hits.slice(0, 5).join(", ") + (n > 5 ? " and " + (n - 5) + " more" : "") + ")";
+}
+function unparsedEntriesNote(found: { unparsed: number[]; marker: number[] }): string {
+  const u = found.unparsed.length, k = found.marker.length;
+  return (u > 0 ? "; " + (u === 1 ? "1 list line looks like a link entry but is not a Markdown link" : u + " list lines look like link entries but are not Markdown links") + entryLineList(found.unparsed) : "")
+    + (k > 0 ? "; " + (k === 1 ? "1 list line opens with a dash or bullet that is not a Markdown list marker" : k + " list lines open with a dash or bullet that is not a Markdown list marker") + entryLineList(found.marker) : "");
 }
 
 // The text of an ATX H1, or null when the line is not one. One to three leading spaces, a
@@ -1027,13 +1041,13 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
   }
   // A list line that looks like a link entry but is not one (Tek-730) turns the links check to a warn.
   const lookalikes = unparsedLinkEntries(lines, fenced, new Set(proseLinks.map((m) => m.at)));
-  if (lookalikes.length > 0) {
+  if (lookalikes.unparsed.length + lookalikes.marker.length > 0) {
     const lk = checks[checks.length - 1]!;
     lk.status = "warn";
     lk.detail += unparsedEntriesNote(lookalikes);
   }
   if (f.truncated) {
-    add("size", "warn", "Small enough to be cheap to read", "over 256 KB, read truncated");
+    add("size", "warn", "Small enough to be cheap to read", "over 256 KiB, read truncated");
   } else if (f.bytes <= 51200) {
     add("size", "pass", "Small enough to be cheap to read", f.bytes + " bytes");
   } else {
@@ -1886,7 +1900,7 @@ function nextLinkValue(s: string, from: number): number {
 // as a Link response header. That is a property of the site, not of the file, so these
 // two carry their own status, "info". They are never a warn and never a fail, the
 // summary line is unchanged, and --strict keeps exiting on warnings only.
-export function findLinkRelations(html: string, linkHeader: string): LinkRelations {
+export function findLinkRelations(html: string, linkHeader: string, readCut: boolean = false): LinkRelations {
   const found: LinkRelations = { describedby: null, markdown: null };
   // Only the head, and only what a parser would put there: a commented-out link element,
   // one inside a script or a template, and one the parser moves into the body are all not
@@ -1930,6 +1944,10 @@ export function findLinkRelations(html: string, linkHeader: string): LinkRelatio
   // A head longer than the cap was read in part, so a relation missing from that part is
   // reported as missing from the part read, not from the page (Tek-496).
   if (whole.length > 65536) found.headCut = true;
+  // The home page itself is read up to the 256 KiB limit, and headOfDocument drops comments and
+  // scripts before the head is measured, so a page cut inside one of those reaches this point with
+  // a short head. Such a result reports what was read as well (Tek-745).
+  if (readCut) found.readCut = true;
   return found;
 }
 
@@ -1946,7 +1964,7 @@ export function validateV2Discovery(found: LinkRelations | null, unreadReason: s
   // A target is shown through maskLocation, as a redirect target is, so a user name, a password,
   // a query value or a fragment in a published link stays out of the report; until 2026-09-27 it
   // was only cut (Tek-496). A relative target stays relative.
-  const where = found.headCut ? "in the first 65,536 characters of the head, the part that was read, or in the Link header" : "in the head or the Link header";
+  const where = found.headCut ? "in the first 65,536 characters of the head, the part that was read, or in the Link header" : found.readCut ? "in the first 256 KiB of the home page, the part that was read, or in the Link header" : "in the head or the Link header";
   add("v2-describedby", found.describedby ? "pass" : "info", "Home page points to its llms.txt (v2)",
     found.describedby ? 'rel="describedby" to ' + cut(maskLocation(found.describedby), 120) : 'no rel="describedby" ' + where + '; v2 recommends it so an agent finds the file without guessing');
   add("v2-markdown-alternate", found.markdown ? "pass" : "info", "Home page points to a markdown version (v2)",
@@ -1982,7 +2000,7 @@ export async function validateHost(input: unknown, opts: ValidateHostOptions = {
       ? validateV2Discovery(null, "the home page redirects away from this host, so this was not measured")
       : home.status !== 200
         ? validateV2Discovery(null, "the home page returned HTTP " + home.status + ", so this was not measured")
-        : validateV2Discovery(findLinkRelations(home.text, home.linkHeader));
+        : validateV2Discovery(findLinkRelations(home.text, home.linkHeader, home.truncated));
   } catch {
     discovery = validateV2Discovery(null, "the home page could not be read, so this was not measured");
   }

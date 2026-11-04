@@ -293,3 +293,43 @@ test("CLI: --strict exits 1 for a second H1 after an indented code line and 0 fo
   const para = "# Site\n\n> Summary\n\nPara text\n    continued\nTitle\n===\n\n## Docs\n- [Doc](https://turva.dev)\n";
   assert.equal(run(para, "--strict").status, 0);
 });
+
+// Tek-745 K10b (0.5.1): the home page is read up to 256 KiB. A page cut inside a long comment or script reaches
+// the relation scan with a short head, because the head drops comments and scripts before it is measured, so the
+// text says what was read. Only the text moves: the status stays info and the summary does not change.
+test("Tek-745 K10b: a home page cut by the 256 KiB read limit reports the part that was read", async () => {
+  const links = "<link rel=\"describedby\" href=\"/llms.txt\"><link rel=\"alternate\" type=\"text/markdown\" href=\"/index.md\">";
+  const pad = "x".repeat(300 * 1024);
+  const hostWith = async (home: string) => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => String(url).endsWith("/llms.txt")
+      ? new Response(base, { headers: { "content-type": "text/plain" } })
+      : new Response(home, { headers: { "content-type": "text/html" } });
+    try {
+      return await validateHost("example.com");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  };
+  const detailOf = (r: { checks: LlmsCheck[] }, id: string) => r.checks.find((c) => c.id === id)!.detail;
+  const cutInComment = await hostWith("<!doctype html><html><head><title>t</title><!-- " + pad + " -->" + links + "</head><body></body></html>");
+  const cutInScript = await hostWith("<!doctype html><html><head><title>t</title><script>" + pad + "</script>" + links + "</head><body></body></html>");
+  for (const result of [cutInComment, cutInScript]) {
+    assert.equal(status(result.checks, "v2-describedby"), "info");
+    assert.equal(status(result.checks, "v2-markdown-alternate"), "info");
+    assert.equal(detailOf(result, "v2-describedby"),
+      "no rel=\"describedby\" in the first 256 KiB of the home page, the part that was read, or in the Link header; v2 recommends it so an agent finds the file without guessing");
+    assert.equal(detailOf(result, "v2-markdown-alternate"),
+      "no rel=\"alternate\" type=\"text/markdown\" in the first 256 KiB of the home page, the part that was read, or in the Link header; v2 recommends it so an agent finds the markdown form without guessing");
+    assert.equal(result.summary, "valid");
+  }
+  // a head that is itself over the 65,536 character cap keeps its own text, cut by the read limit or not
+  const longHead = await hostWith("<html><head>" + "<meta name=\"a\" content=\"b\">".repeat(12000) + links + "</head></html>");
+  assert.match(detailOf(longHead, "v2-describedby"), /^no rel="describedby" in the first 65,536 characters of the head, the part that was read, or in the Link header;/);
+  // a page under the limit, and a relation before the cut, keep their old wording and result
+  const small = await hostWith("<head><title>t</title></head>");
+  assert.match(detailOf(small, "v2-describedby"), /^no rel="describedby" in the head or the Link header;/);
+  const before = await hostWith("<head>" + links + "<!-- " + pad + " --></head>");
+  assert.equal(status(before.checks, "v2-describedby"), "pass");
+  assert.equal(detailOf(before, "v2-describedby"), "rel=\"describedby\" to /llms.txt");
+});

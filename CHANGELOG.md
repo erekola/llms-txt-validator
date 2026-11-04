@@ -1,5 +1,16 @@
 # turva-llms-txt-validator changelog
 
+## 0.5.1 (2026-11-04)
+Four changes to the checks, mirrored from the hosted validator as of site 3.220.0. This release changes which files pass in both directions.
+
+A backtick that opens in one block and finds its match only in another block no longer uses up the closing backtick. Before, a stray backtick in one paragraph or list item moved the pairing by one, so a link inside the next real inline code span could count as a link and text after it could be read as code. Now the closing backtick stays free to open a span of its own in its own block. A file with a link inside inline code that follows a stray backtick in another block no longer gets credit for that link, so it can move from pass to warn on the links check. A file with a relative link inside inline code that follows a stray backtick in another block no longer warns about that relative link, and a real link that the shifted pairing had read as code now counts, so such files can move from warn to pass. A link inside inline code still does not count as a link in either case.
+
+The note on the links check now has two kinds, each with its own sentence, its count and its first five line numbers. A list line whose entry has an unclosed destination reads "looks like a link entry but is not a Markdown link". A list line that opens with an en dash, an em dash or a bullet reads "opens with a dash or bullet that is not a Markdown list marker", even when its link parses and is counted as a link. The earlier sentence "so an agent will not follow it" is gone, because nothing here measures how agents treat such lines. The status and the files that warn are unchanged.
+
+When the home page is cut at the 256 KiB read limit and no relation is found in the part that was read, the two discovery info lines say "in the first 256 KiB of the home page, the part that was read, or in the Link header". They stay info and move no summary and no exit code. A head that is itself over 65,536 characters keeps its own wording.
+
+The size note for a file cut at the read limit now says "over 256 KiB, read truncated" instead of "over 256 KB". Only the unit in the text changes. The limit is 262,144 bytes and the status stays warn.
+
 ## 0.5.0 (2026-10-31)
 
 Two changes to the checks, both mirrored from the hosted validator.
