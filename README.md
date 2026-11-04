@@ -115,7 +115,7 @@ Links are read the way CommonMark reads them for the forms listed here.
 
 - A link inside inline code, after an escaped bracket or in an image does not count.
 - Inline code pairs only inside one block, the way CommonMark reads blocks. A blank line, a heading, a list item, a thematic break and a setext underline each end a block. An empty list item or a numbered item that does not start at 1 does not end a paragraph, unless the line closes an open list item, so a backtick pair across such a line is inline code. Block quotes and HTML blocks are not read as blocks here, so a backtick pair across the start of one, or across lines inside a block quote, stays inline code. CommonMark ends the block at a block quote and at an HTML block that can interrupt a paragraph.
-- A fence indented past three columns inside a list item hides what it holds, closed or not, as long as it sits less than four columns past the item's content column. Further in, CommonMark reads indented code, and this validator still counts a link in it. One gap remains for a fence opened on a list marker line, at four or more columns or by a tab: its closing line at 0 to 3 columns reads as a new opening fence, so the lines after it are skipped until the next fence.
+- A fence inside a list item counts as a fence, closed or not, in either fence character, on the marker line or up to three columns past the item's content column. It ends when the item closes. Four or more columns past that column is indented code.
 - A link in an ordered list, a target in angle brackets and a target with a title in double or single quotes do count.
 - A title in parentheses is not read, so `[Guide](https://example.org/guide (Overview))` is not collected.
 - An unbracketed target ends at its first closing parenthesis, so `https://example.org/docs_(v2)` is read only up to `https://example.org/docs_(v2`. Write a target that contains parentheses in angle brackets.
@@ -127,13 +127,14 @@ Links are read the way CommonMark reads them for the forms listed here.
 
 A heading is an H2 when `##` is followed by a space or a tab, or when it is one line of text underlined with hyphens. The text line must follow a blank line or the start of the file. A list item above a line of hyphens is not an H2, and neither is a line of hyphens after a blank line.
 
-A link in a four-space indented code block counts as a link, but such a block does not count as a file list under an H2.
+A link in a four-space indented code block counts as a link unless a backtick pair encloses it. Outside a list item, such a block does not count as a file list under an H2.
 
 A link on a line that continues a list item, such as the line after a bare `-`, counts as that item's link:
 
 - After a bare marker the next line counts only when it is indented to the item's content column, which is 2 for `-` and 3 for `1.`. A blank line right after a bare marker ends the item.
 - After a blank line inside an item, a line counts only when it is indented to the content column, where the item's text starts, so `-   item` needs 4 columns.
-- A code fence indented less than that column ends the item. A fence indented to it keeps the item open, and the line after the fence then counts only when it is indented to that column too.
+- A code fence indented less than that column ends the item. A fence indented to it keeps the item open, and a lazy continuation cannot follow a fence, so the line after it needs the indent too.
+- In a nested list, the content column of any item still open is enough for a line after a blank line or a fence.
 
 ### Home-page discovery
 
@@ -214,10 +215,10 @@ The strict type check found two inputs that could leave `undefined` in a check's
 GitHub Actions publishes every version from 0.1.3 on with npm trusted publishing, and each one carries a provenance attestation. To check one, install it in an empty directory and ask npm to verify the signatures. Replace the version with the one you want to check.
 
 ```sh
-mkdir verify-llms && cd verify-llms && npm init -y && npm install turva-llms-txt-validator@0.6.0 --ignore-scripts && npm audit signatures
+mkdir verify-llms && cd verify-llms && npm init -y && npm install turva-llms-txt-validator@0.6.1 --ignore-scripts && npm audit signatures
 ```
 
-`npm audit signatures` checks the registry signature and the provenance attestation of each installed package that has one. The attestation of this package names three things to compare with what you expect: the repository `github.com/erekola/llms-txt-validator`, the workflow file `.github/workflows/publish.yml` and the commit that produced the tarball. The npm version page shows them under Provenance. Tag `v0.6.0` must point at that same commit, and `gh api repos/erekola/llms-txt-validator/commits/v0.6.0 --jq .sha` prints it. A mismatch is a reason not to use that version. Provenance proves which workflow built a release and from which commit. It does not prove that the code is safe, so reading the source and the dependencies stays your job.
+`npm audit signatures` checks the registry signature and the provenance attestation of each installed package that has one. The attestation of this package names three things to compare with what you expect: the repository `github.com/erekola/llms-txt-validator`, the workflow file `.github/workflows/publish.yml` and the commit that produced the tarball. The npm version page shows them under Provenance. Tag `v0.6.1` must point at that same commit, and `gh api repos/erekola/llms-txt-validator/commits/v0.6.1 --jq .sha` prints it. A mismatch is a reason not to use that version. Provenance proves which workflow built a release and from which commit. It does not prove that the code is safe, so reading the source and the dependencies stays your job.
 
 ## Development
 

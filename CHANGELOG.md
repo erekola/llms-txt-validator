@@ -1,5 +1,10 @@
 # turva-llms-txt-validator changelog
 
+## 0.6.1 (2026-11-04)
+One change to the checks, mirrored from the hosted validator as of site 3.222.0. This release changes which files pass in both directions.
+
+The validator now has one reading of a fence, the same for every check. When a fence was opened on a list marker line, or indented past three columns inside a list item, its closing line at 0 to 3 columns read as a new opening fence, and the lines after it were skipped until the next fence. Those lines now count, unless the closing line sits left of the item's content column, where CommonMark also ends the item and opens a new fence. An unclosed fence inside a list item now ends when the item closes. In a nested list, a line after a blank line or a fence now counts when it is indented to the content column of any item still open. The link and section counts were compared with commonmark.js 0.31.2.
+
 ## 0.6.0 (2026-11-04)
 Two changes to the checks, mirrored from the hosted validator as of site 3.221.0, and one change to the test matrix. This release changes which files pass in both directions, and it changes the wording of every sentence the validator wrote with a semicolon.
 

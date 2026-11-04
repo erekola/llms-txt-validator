@@ -268,7 +268,6 @@ function referenceMask(text: string, makeReader: () => (line: string) => number)
   for (const line of text.split("\n")) {
     const block = blockOf(line);
     blocks.fill(block, lineStart, lineStart + line.length + 1);
-    if (block < 0) mask.fill(1, lineStart, lineStart + line.length);
     lineStart += line.length + 1;
   }
   const runs: { at: number; len: number; escaped: boolean }[] = [];
@@ -311,7 +310,7 @@ function seeded(seed: number) {
 
 test("Tek-747: the block number on each run decides every pair as a plain scan does, on 3000 generated texts", async () => {
   const codeSpanMask = await loadMask();
-  const parts = ["`", "``", "```", BSL + "`", "word", " ", "  ", "\t", "\n", "\n", "\n\n", "\n   \n", "\n# h\n", "\n## ", "\n- item ", "\n* ", "\n+ x", "\n1. n ", "\n12) m ", "\n    - indented ", "\n#nohash ", "\n2. n ", "\n14) ", "\n*\n", "\n-\n", "\n***\n", "\n===\n", "\n  2. k ", "[a](b)", "x"];
+  const parts = ["`", "``", "```", BSL + "`", "word", " ", "  ", "\t", "\n", "\n", "\n\n", "\n   \n", "\n# h\n", "\n## ", "\n- item ", "\n* ", "\n+ x", "\n1. n ", "\n12) m ", "\n    - indented ", "\n#nohash ", "\n2. n ", "\n14) ", "\n*\n", "\n-\n", "\n***\n", "\n===\n", "\n  2. k ", "`c`", "`d `", "[a](b)", "x"];
   const rnd = seeded(745);
   let withSpans = 0, crossing = 0;
   for (let n = 0; n < 3000; n++) {
@@ -470,9 +469,6 @@ test("Tek-747: the mask itself on the three differences", async () => {
   // the next item of an open list is a new block, and a marker indented into the open item is not
   assert.equal(shown("1. a `b\n2. c` d"), "---------------");
   assert.equal(shown("- a `b\n  2. c` d"), "----`b\n  2. c`--");
-  // a fence line inside a list item is masked whole, closed or not
-  assert.equal(shown("- a\n    ~~~\n    x\n    ~~~\nb"), "----    ~~~-    x-    ~~~--");
-  assert.equal(shown("- a\n    ```\n    x\nb"), "----    ```-    x--");
 });
 
 test("Tek-747: the block reader stays linear on nested markers and a deep item stack", async () => {
@@ -524,11 +520,56 @@ test("Tek-747: the report's sentences end in a period and carry no semicolon", (
   assert.equal(report({ redirect: true, reason: "too-many", status: 301, location: "" }, "http-status"), "too many redirects. The llms.txt is not served at a stable URL");
 });
 
-// The disclosed gap in the README. commonmark.js finds one link in each of these files. fenceMask does not open the first fence, so it
-// opens one at the closing line and the real entry after it is skipped. The old copy gave the same answer when the fence held no link.
-test("Tek-747: a known gap, a closing line at 0 to 3 columns reads as a new opening fence", () => {
-  for (const body of ["- ```\n  a\n  ```\n", "- a\n    ```\n    b\n  ```\n", "- a\n\t```\n\tb\n  ```\n"]) {
-    const text = "# T\n\n> s\n\n## Docs\n\n" + body + "- [m](https://example.com/m)\n";
-    assert.equal(byId(validateLlmsTxt(good(text)), "links").detail, "no markdown links found", JSON.stringify(body));
+// --- Tek-749: one reading of a fence. fenceMask takes its fences from inlineBlockReader. Each row is a body under one H2, with the link
+// count and the number of sections carrying a file list that commonmark.js 0.31.2 gave on 2026-11-04, @ being one absolute link.
+// Before this, a closing line at 0 to 3 columns of a fence fenceMask had not seen opened a new fence and hid the rest of the file.
+const FENCE_ROWS: [string, number, number][] = [
+  ["- ```\n  a\n  ```\n- @\n", 1, 1],
+  ["- a\n    ```\n    b\n  ```\n- @\n", 1, 1],
+  ["- a\n\t```\n\tb\n  ```\n- @\n", 1, 1],
+  ["- a\n  ```\n  b\n- @\n", 1, 1],
+  ["1. a\n   ```\n   b\n2. @\n", 1, 1],
+  ["- a\n  ```\n  ## x\n  ```\n- @\n", 1, 1],
+  ["- a\n    ```\n    ## x\n    - @\n    ```\n", 0, 0],
+  ["- ```\n  ## x\n  @\n  ```\n", 0, 0],
+  ["- a\n    ```\n    b\n\n@\n", 1, 0],
+  ["- a\n    ~~~\n    b\n  ~~~\n- @\n", 1, 1],
+  ["- a\n    ```\n    b\n```\n- @\n", 0, 0],
+  ["- a\n  - b\n      ```\n      c\n    ```\n- @\n", 1, 1],
+  ["- a\n\n      ```\n      b\n- @\n", 1, 1],
+  ["```\na\n```\n- @\n", 1, 1],
+  ["  ```\n  a\n  ```\n- @\n", 1, 1],
+  ["- @\n```\n- not\n", 1, 1],
+  ["- a\n  - b\n    ```\n    x\n    ```\n  @\n", 1, 1],
+  ["- a\n  - b\n\n  @\n", 1, 1],
+  ["- a\n\n  *\n\n  @\n", 1, 1],
+  ["- a\n  ```\n  b\n  ```\n@\n", 1, 0],
+  ["- a\n  - b\n\n@\n", 1, 0],
+  ["1. a\n   - b\n     ```\n     c\n     ```\n   @\n", 1, 1],
+  ["- a\n  - b\n\n    c\n\n  - @\n", 1, 1],
+  ["- a\n  - b\n    ```\n    c\n    ```\n- d\n\n  @\n", 1, 1],
+  ["-   x\n```\n```\n    ```\n  @\n    ```\n", 1, 0],
+  ["-\n    ```\n    ```\n\n  @\n", 1, 1],
+  ["- a\n    ```js `x`\n    @\n", 1, 1],
+  ["- a\n```\n```\n  `@\n2. b`\n", 0, 0],
+  ["-   a\n- b\n\n  @\n", 1, 1],
+  ["- a\n\nb\n\n  - c\n\n  @\n", 1, 0],
+  ["*\n\n  @\n", 1, 0],
+  ["- a\n    ```\n    b\n ```\n- @\n", 0, 0],
+  ["  7. a\n\t + n\n     ~~~~\n     ~~~~\n         ```sh\n        @\n", 1, 1],
+];
+
+test("Tek-749: the links and sections checks read a fence and a nested item the way the reference does", () => {
+  for (const [body, links, lists] of FENCE_ROWS) {
+    const checks = validateLlmsTxt(good("# T\n\n> s\n\n## Docs\n\n" + body.replace("@", "[l](https://example.com/a)")));
+    const l = /^(\d+) links?/.exec(byId(checks, "links").detail);
+    assert.equal(l ? Number(l[1]) : 0, links, "links of " + JSON.stringify(body));
+    const s = /^1 section, (\d+) carrying/.exec(byId(checks, "sections").detail);
+    assert.equal(s ? Number(s[1]) : 0, lists, "sections of " + JSON.stringify(body));
   }
+  const html = validateLlmsTxt(good("# T\n\n> s\n\n## Docs\n\n- a\n    ```sh\n    echo '<endpoint-id>'\n    # c\n    ```\n- [l](https://example.com/a)\n"));
+  assert.equal(byId(html, "no-html").status, "pass", "angle brackets inside a fence in a list item are not markup");
+  assert.equal(byId(html, "links").detail, "1 link, all absolute URLs");
+  // One read of the raw lines: a second read of the blanked text would not pair these backticks, and the tag would read as markup.
+  assert.equal(byId(validateLlmsTxt(good("# T\n\n> s\n\n## Docs\n\n- [k](https://example.com/k)\n\n```\n```\n  `<div>\n2. b`\n")), "no-html").status, "pass");
 });
