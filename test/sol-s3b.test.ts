@@ -333,11 +333,15 @@ test("LV-32: the timeoutMs option aborts a read that never answers", async () =>
   globalThis.fetch = (async (_url: unknown, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
     init?.signal?.addEventListener("abort", () => reject(init.signal!.reason));
   })) as typeof fetch;
+  // AbortSignal.timeout does not hold the event loop open, and a stubbed fetch has no socket that does.
+  // Node.js 22 then ends the test as pending before the timer fires, so a plain timer keeps the loop alive.
+  const keepAlive = setInterval(() => {}, 1000);
   try {
     const started = Date.now();
     await assert.rejects(() => validateHost("example.com", { timeoutMs: 30 }), (e: unknown) => (e as { name?: string }).name === "TimeoutError");
     assert.ok(Date.now() - started < 3000);
   } finally {
+    clearInterval(keepAlive);
     globalThis.fetch = realFetch;
   }
 });
