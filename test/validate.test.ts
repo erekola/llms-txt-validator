@@ -229,8 +229,10 @@ test("the strip is one pass, so a comment that mentions a script tag is only a c
 });
 
 test("a link tag written inside a title is text, not markup", () => {
-  assert.equal(findLinkRelations('<head><title>How to use <link rel=describedby> for llms.txt</title></head>', "").describedby, null);
-  assert.equal(findLinkRelations('<head><title>How to use <link rel=describedby></title><link rel="describedby" href="/real"></head>', "").describedby, "/real");
+  // The link tag inside the title carries an href: a relation without a target is no relation, so without
+  // one these passed whether or not the title content was set aside (LV-31, round S3, Tek-546).
+  assert.equal(findLinkRelations('<head><title>How to use <link rel=describedby href=/fake> for llms.txt</title></head>', "").describedby, null);
+  assert.equal(findLinkRelations('<head><title>How to use <link rel=describedby href=/fake></title><link rel="describedby" href="/real"></head>', "").describedby, "/real");
 });
 
 // The tag scan is by index, not by /<link\b[^>]*>/g, because that regex is quadratic on
@@ -781,6 +783,8 @@ test("F08: a code block right after the title is not a blockquote summary, 0 to 
   for (const text of [
     "# T\n\n    > this is an indented code block\n\n## Docs\n\n- [G](https://ex.com/g)\n",
     "# T\n\n\tthis is a tab-indented code block\n\n## Docs\n\n- [G](https://ex.com/g)\n",
+    // A tab before the ">" is an indented code block as well (LV-31, round S3): the fixture above has no ">" at all.
+    "# T\n\n\t> this is a tab-indented block\n\n## Docs\n\n- [G](https://ex.com/g)\n",
   ]) {
     const c = byId(validateLlmsTxt(good(text)), "summary");
     assert.equal(c.status, "warn", text);

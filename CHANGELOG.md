@@ -1,18 +1,57 @@
 # turva-llms-txt-validator changelog
 
+## 0.7.0 (2026-11-05)
+Changes to the checks and to the discovery lines, mirrored from the hosted validator as of site 3.224.0. This release changes which files pass in both directions. The changes come from an outside read of this repository, repeated against the current code before each fix. The README list of read forms covers the Markdown rules, one by one.
+
+Reading links and file lists:
+
+- A target keeps balanced parentheses, so `docs_(v2)` is read whole. A target or a definition destination with an unbalanced parenthesis is not a link.
+- An empty target, `[a]()` or `[a](<>)`, is a link with an empty target and counts as relative, in a paragraph too. The list note no longer calls it "not a Markdown link".
+- A bracket inside a code span neither closes nor breaks a label. `` [`Array[T]` reference](url) `` is a link and `` [not a `link](url`) `` is not. Text inside a code span no longer starts the "looks like a link entry" note.
+- A label ends where its paragraph ends. A heading, a bullet or a number starting at 1, a quote, a fence, a thematic break or a setext underline that can interrupt the paragraph means there is no link.
+- A link inside the description text of an image is not a link. A reference image whose label has a definition is skipped.
+- A link reference definition opens only where a block starts, for example after a blank line, a heading, a fence or a thematic break, at the start of a quote, as a list item or right after another definition. A line that continues a paragraph or a list item is not a definition, and a definition line no longer starts the note.
+- A shortcut reference is found after a colon in the same line and after an inline target that did not parse.
+- Labels match by Unicode case folding, so `ẞ` and `SS` are one label. Label white space folds as ASCII only.
+- A character reference in a target needs its semicolon, so `https&#58//` stays as written. The Link header and the HTML reading keep their own decoding.
+- A no-break or ideographic space is part of a target. Only an ASCII space, a tab or another control character ends one.
+- Indented code inside a list item no longer counts as a file list: five or more spaces after the marker, or six columns after a blank line under `- item`. The link still counts as a link.
+- The lines of a raw HTML block, types 1 to 7 of CommonMark, hold no links, definitions or list items when the block starts at the start of a line outside quotes and list items. The no-HTML check still reads them.
+- A block quote line ends a paragraph for backtick pairing. A pair inside one quote still pairs.
+
+Titles and summaries:
+
+- A thematic break, a link reference definition or an HTML line over a run of `=` no longer makes a setext title.
+- A title, a link name or a summary whose text is only character references to white space, code spans of white space or empty quote markers counts as empty: `# &#32;`, `[&#32;](url)`, `>>` and `> >`.
+- A line that holds only a no-break or ideographic space is not a blank line, so it can no longer stand in front of the H1.
+
+Fetching and discovery:
+
+- A redirect to the same site with one trailing dot in the host is followed. A second dot still fails.
+- A `-->` closes the escaped state of a script, so a `<script>` in its text after a closed comment no longer hides the real end tag. `</scriptX>` no longer ends the double escaped state.
+- End tags with attributes, such as `</script data-x>` and `</template data-x>`, end their element. A quoted `>` inside the end tag does not end the tag.
+- Template scanning reads every tag whole, so a quoted `<` or `>` in an attribute is not markup, `title="<!--"` included. A bogus comment ends at the first `>`.
+- Inside `<svg>` and `<math>` in a template, title, script and style are not raw text, except at the HTML integration points such as `foreignObject` and `mtext`. A self-closing `<svg/>` opens nothing. `<plaintext>` in a template makes the rest of the document text.
+- White space before the head and after `</head>` no longer counts against the 65,536 character head limit. White space inside the head still does.
+- A Link header value with a non-empty `anchor` that does not resolve to the home page is not used. `findLinkRelations` takes an optional fourth argument with the home page addresses, and without it an anchored value is not used. These discovery lines stay info and move no summary and no exit code.
+
+Hostile input stays fast: hostile files at the 256 KiB read limit each ran in under 0.2 seconds in two independent runs.
+
+Tests: new boundary tests at 51,200 and 262,144 bytes, a body in chunks, a timeout, home page errors and the CLI's `--json`, result line and exit codes. Two fixtures that passed for an unrelated reason now carry an href and a tab before `>`.
+
 ## 0.6.1 (2026-11-04)
 One change to the checks, mirrored from the hosted validator as of site 3.222.0. This release changes which files pass in both directions.
 
 The validator now has one reading of a fence, the same for every check. When a fence was opened on a list marker line, or indented past three columns inside a list item, its closing line at 0 to 3 columns read as a new opening fence, and the lines after it were skipped until the next fence. Those lines now count, unless the closing line sits left of the item's content column, where CommonMark also ends the item and opens a new fence. An unclosed fence inside a list item now ends when the item closes. In a nested list, a line after a blank line or a fence now counts when it is indented to the content column of any item still open. The link and section counts were compared with commonmark.js 0.31.2.
 
 ## 0.6.0 (2026-11-04)
-Two changes to the checks, mirrored from the hosted validator as of site 3.221.0, and one change to the test matrix. This release changes which files pass in both directions, and it changes the wording of every sentence the validator wrote with a semicolon.
+Two changes to the checks, mirrored from the hosted validator as of site 3.221.0, and one change to the test matrix. This release changes which files pass in both directions, and it changes the wording of the sentences the validator wrote with a semicolon, except the two v2 discovery information lines.
 
 Backtick pairs are now read closer to how CommonMark reads blocks. A heading line is a block of its own, so its backtick no longer pairs with the next line. An empty list item and a numbered item that does not start at 1 no longer end a paragraph. A backtick pair across such a line is now inline code, and a link inside it does not count. If such a line closes an open list item, it still starts a new item there. Thematic breaks and setext underlines now end a paragraph too. A fence indented past three columns inside a list item now hides what it holds, closed or not, in either fence character, as long as it sits less than four columns past the item's content column. Further in, CommonMark reads indented code, and this validator still counts a link in it. The link counts were compared with commonmark.js 0.31.2. Block quotes and HTML blocks are still not read as blocks here.
 
 An older gap now shows more often. When a fence is opened on a list marker line, at four or more columns or by a tab, its closing line at 0 to 3 columns reads as a new opening fence, and the lines after it are skipped until the next fence. Earlier versions counted a link inside the first fence, and that count could mask the gap, so such a file can now warn that it has no links or no file list.
 
-The sentences the validator writes in a check's detail no longer hold a semicolon. A sentence break stands there now, as in `no H2 sections found. Sections are the convention for grouping links`. This moves no status. A script that matches a detail as text has to follow, and `id` and `status` are the fields to read.
+The sentences the validator writes in a check's detail no longer hold a semicolon, with one exception: the details of the two v2 discovery checks, `v2-describedby` and `v2-markdown-alternate`, still end in a clause after a semicolon that begins `v2 recommends it` when they are information lines. Everywhere else a sentence break stands there now, as in `no H2 sections found. Sections are the convention for grouping links`. This moves no status. A script that matches a detail as text has to follow, and `id` and `status` are the fields to read.
 
 GitHub Actions now also tests Node.js 26 on Ubuntu, so the matrix runs Node.js 22, 24 and 26 on Ubuntu and Node.js 22 on Windows.
 

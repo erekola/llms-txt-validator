@@ -238,6 +238,10 @@ export async function fetchLlmsTxt(host: string, opts: FetchOptions = {}): Promi
       if (hop >= 4) return { redirect: true, reason: "too-many", status: res.status, location: cut(maskLocation(loc, url), 120) };
       let next: URL;
       try { next = new URL(loc, url); } catch { return { redirect: true, reason: "bad-location", status: res.status, location: cut(maskLocation(loc, url), 120) }; }
+      // LV-22 (round S3, Tek-546): one trailing dot names the same host, as it does in the typed
+      // address (normalizeHostInput), so a redirect to https://example.com./ is a same-site redirect.
+      // A second dot still fails the host test below.
+      if (next.hostname.length > 1 && next.hostname.endsWith(".")) next.hostname = next.hostname.slice(0, -1);
       const safeTarget = next.protocol === "https:" && !next.port && !next.username && !next.password && isValidPublicHost(next.hostname);
       const twin = (next.hostname.startsWith("www.") ? next.hostname.slice(4) : next.hostname) === reqApex;
       if (!safeTarget) return { redirect: true, reason: "unsafe-target", status: res.status, location: cut(maskLocation(next.href), 120) };
@@ -361,8 +365,11 @@ function codeSpanMask(text: string, lineBlocks: number[] = readBlocks(text.split
 // not carry a backtick in its info string, while a tilde fence may. A later round will read the
 // consequence as a bug and it is not: in ```js `x` the info string holds a backtick, so that line is
 // prose, and a bare ``` after it OPENS a block instead of closing one. CommonMark reads the same
-// input the same way, measured against the spec 2026-09-10. Block quotes and HTML blocks
-// are not read here, neither the start of one nor the lines of a block quote. Every pattern runs at
+// input the same way, measured against the spec 2026-09-10. A block quote line (a ">" marker) ends a paragraph and starts a
+// quote paragraph of its own, which the next quote lines and the lazy lines after them extend, so a code span pairs inside one
+// quote and never across its edge (S3, LV-13); the content of a quote is not read further, and HTML blocks are not read here
+// (htmlBlockLines reads them). The reader also says, per line, whether it took the line as indented code (readBlockInfo,
+// WL-11). Every pattern runs at
 // a fixed position, the thematic break test and the closing fence test run once per line, and the
 // walk over the open items stops at the line's own width, so the reader stays linear however deep
 // the items nest.
@@ -371,20 +378,32 @@ const INLINE_UNDERLINE = /(?:=+|-+)[ \t]*$/y;
 const INLINE_THEMATIC = /([-*_])(?:[ \t]*\1){2,}[ \t]*$/y;
 const INLINE_MARKER = /(?:[-*+]|(\d{1,9})[.)])(?=[ \t]|$)/y;
 const INLINE_FENCE = /(`{3,})[^`]*$|(~{3,})/y;
+const INLINE_QUOTE = />/y;
+// A Markdown blank line holds spaces and tabs only. trim() also removes no-break and ideographic spaces and other Unicode
+// white space, and each of those is text in CommonMark (S3, LV-16): every structure decision asks this instead.
+function isMdBlank(l: string): boolean {
+  return /^[ \t]*$/.test(l);
+}
 function matchAt(re: RegExp, s: string, at: number): RegExpExecArray | null {
   re.lastIndex = at;
   return re.exec(s);
 }
 function readBlocks(lines: string[]): number[] {
-  const blockOf = inlineBlockReader();
-  return lines.map((l) => blockOf(l));
+  return readBlockInfo(lines).blocks;
 }
-function inlineBlockReader(): (line: string) => number {
-  let block = 0, para = false, code = false, emptyItem = false;
+function readBlockInfo(lines: string[]): { blocks: number[]; code: boolean[] } {
+  const code: boolean[] = [];
+  const blockOf = inlineBlockReader(code);
+  return { blocks: lines.map((l) => blockOf(l)), code };
+}
+function inlineBlockReader(codeOut?: boolean[]): (line: string) => number {
+  let block = 0, para = false, code = false, emptyItem = false, quote = false, lineCode = false;
   let fenceChar = "", fenceLen = 0, fenceDepth = 0;
   const items: number[] = [];
-  return (line) => {
+  const readLine = (line: string): number => {
     let p = 0, col = 0;
+    const wasQuote = quote;
+    quote = false;
     const skipBlanks = () => {
       for (; p < line.length; p++) {
         if (line[p] === " ") col++;
@@ -409,7 +428,7 @@ function inlineBlockReader(): (line: string) => number {
         if (col - (fenceDepth > 0 ? items[fenceDepth - 1]! : 0) < 4) {
           let end = p;
           while (line[end] === fenceChar) end++;
-          if (end - p >= fenceLen && line.slice(end).trim() === "") fenceChar = "";
+          if (end - p >= fenceLen && isMdBlank(line.slice(end))) fenceChar = "";
         }
         return -1;
       }
@@ -421,12 +440,23 @@ function inlineBlockReader(): (line: string) => number {
       if (col - (depth > 0 ? items[depth - 1]! : 0) >= 4) {
         if (para) return block;
         items.length = depth;
+        lineCode = true;
         if (code) return block;
         code = true;
         return ++block;
       }
       code = false;
       if (matchAt(INLINE_HEADING, line, p)) { items.length = depth; para = false; return ++block; }
+      if (matchAt(INLINE_QUOTE, line, p)) {
+        // An empty quote line ends the quote paragraph the way a blank line does; any other quote line starts one, or goes on with
+        // the one the line before it opened.
+        items.length = depth;
+        quote = true;
+        if (/^>(?:[ \t]*>)*[ \t]*$/.test(line.slice(p))) { para = false; return ++block; }
+        if (wasQuote && para) return block;
+        para = true;
+        return ++block;
+      }
       const fence = matchAt(INLINE_FENCE, line, p);
       if (fence) {
         items.length = depth;
@@ -457,45 +487,104 @@ function inlineBlockReader(): (line: string) => number {
     if (!para) { items.length = depth; para = true; block++; }
     return block;
   };
+  return (line) => {
+    lineCode = false;
+    const b = readLine(line);
+    if (codeOut) codeOut.push(lineCode);
+    return b;
+  };
 }
 
 // A CommonMark link reference label is matched without regard to case or the exact run of
 // whitespace inside it, so "[Guide]" and "[ guide ]" name the same definition.
 function normalizeLinkLabel(s: string): string {
-  return s.trim().replace(/\s+/g, " ").toLowerCase();
+  let a = 0, b = s.length;
+  while (a < b && " \t\n".includes(s[a]!)) a++;
+  while (b > a && " \t\n".includes(s[b - 1]!)) b--;
+  return s.slice(a, b).replace(/[ \t\n]+/g, " ").toLowerCase().toUpperCase();
 }
 
+// A destination written without angle brackets ends at an ASCII space or control character, and at nothing else (S3, LV-16):
+// a no-break or an ideographic space is part of it, the way CommonMark reads one. The parentheses of one must balance (S3, WL-12 and LV-09): a backslash-escaped one
+// does not count, an unmatched "(" or ")" leaves no destination.
+function isDestinationEnd(c: string): boolean {
+  return c <= " " || c === "\x7f";
+}
+function balancedDestination(s: string): boolean {
+  let depth = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === "\\" && i + 1 < s.length && /[!-\/:-@\[-`{-~]/.test(s[i + 1]!)) i++;
+    else if (c === "(") depth++;
+    else if (c === ")" && --depth < 0) return false;
+  }
+  return depth === 0;
+}
+// The quote markers at the start of a line and, once, a list marker after them, as a definition may sit in a quote or open a
+// list item. quoteEnd is the index after the last ">" (and the one space it may carry), at the end of the markers.
+const DEF_QUOTE = / {0,3}>[ ]?/y;
+const DEF_ITEM = / {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]/y;
+const DEF_HEAD = /^(?: {0,3}>)*[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?$/;
+function quoteMarkers(line: string): { quote: number; at: number } {
+  let at = 0, quote = 0;
+  for (;;) {
+    DEF_QUOTE.lastIndex = at;
+    const m = DEF_QUOTE.exec(line);
+    if (!m) return { quote, at };
+    at += m[0].length;
+    quote++;
+  }
+}
 // Link reference definitions, "[label]: target", read once per document so a reference link
 // such as "[text][label]" can resolve against one written anywhere else in the same file,
-// before or after its use, the way CommonMark allows (outside review 2026-09-28). A definition
-// only opens where a new block can start: at the top of the document, right after a blank
-// line, right after a heading or list marker line, or right after another definition line; a
-// line that continues open paragraph text is read as that paragraph, not as a fresh
-// definition, and a "definition" written inside an inline code span is the span's own literal
-// text (VREG1, round 3 Tek-542). A title after the target counts only in quotes or
-// parentheses on the same line; anything else trailing the target, such as a bare word, makes
-// the whole line not a definition, matching CommonMark instead of reading everything up to the
-// next space as the title's own value. Only the first definition of a given label counts, per
-// spec. A destination wrapped in angle brackets has them stripped.
-function collectLinkDefinitions(text: string, lineBlocks?: number[]): Map<string, string> {
+// before or after its use, the way CommonMark allows. A definition opens a paragraph and cannot interrupt
+// one, so a line is read as one only where a block starts (S3, LV-10): its block number differs from the line before it, it
+// follows another definition, or it opens a quote or a list item of its own. The reader of blocks (readBlocks) does not read
+// quotes, so the lines of a quote are judged against the line above with the quote markers taken off, and a list item marker
+// is taken off before the line is read. Until S3 the line above had to be blank, a heading, a list item or a definition, which
+// refused a definition after "---" or after an empty quote and accepted one that continued a list item. A "definition"
+// written inside an inline code span is the span's own literal text (VREG1, round 3 Tek-542). A title after the
+// target counts only in quotes or parentheses on the same line; anything else trailing the target, such as a bare word,
+// makes the whole line not a definition, matching CommonMark. A destination without angle brackets must have balanced
+// parentheses (S3, LV-09). Only the first definition of a given label counts, per spec. A destination wrapped in angle brackets
+// has them stripped. defAt, when given, receives the index of the "[" of every definition line.
+function collectLinkDefinitions(text: string, lineBlocks?: number[], defAt?: Set<number>): Map<string, string> {
   const defs = new Map<string, string>();
   const lines = text.split("\n");
+  const blocks = lineBlocks || readBlocks(lines);
   const code = codeSpanMask(text, lineBlocks);
   const starts: number[] = [];
   { let offset = 0; for (const l of lines) { starts.push(offset); offset += l.length + 1; } }
-  const DEF_START = /^ {0,3}\[[^\]]+\]:/;
-  const BLOCK_START = /^ {0,3}(#{1,6}(?:[ \t]|$)|[-*+][ \t]|\d{1,9}[.)][ \t])/;
+  let prevDef = false, prevQuote = 0, prevInner = "";
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
-    const prev = i > 0 ? lines[i - 1]! : "";
-    if (prev.trim() !== "" && !DEF_START.test(prev) && !BLOCK_START.test(prev)) continue;
-    const m = /^ {0,3}\[([^\]]+)\]:[ \t]*(<[^<>\n]*>|\S+)([ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^()\n]*\)))?[ \t]*$/.exec(line);
+    const qm = quoteMarkers(line);
+    const inner = line.slice(qm.at);
+    let rest = inner;
+    DEF_ITEM.lastIndex = 0;
+    const item = DEF_ITEM.exec(inner);
+    if (item) rest = inner.slice(item[0].length);
+    const wasDef = prevDef, before = prevQuote, beforeInner = prevInner;
+    prevDef = false;
+    prevQuote = qm.quote;
+    prevInner = inner;
+    let opens: boolean;
+    if (i === 0 || wasDef || qm.quote > before) opens = true;
+    else if (qm.quote === 0 && before === 0) opens = blocks[i] !== blocks[i - 1];
+    else opens = isMdBlank(beforeInner) || /^ {0,3}(?:#{1,6}(?:[ \t]|$)|([-*_])(?:[ \t]*\1){2,}[ \t]*$)/.test(beforeInner);
+    if (!opens) continue;
+    const m = /^ {0,3}\[([^\]]+)\]:[ \t]*(<[^<>\n]*>|[^\x00-\x20\x7f]+)([ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^()\n]*\)))?[ \t]*$/.exec(rest);
     if (!m) continue;
-    if (code[starts[i]! + line.indexOf("[")]) continue;
-    const label = normalizeLinkLabel(m[1]!);
-    if (!label || defs.has(label)) continue;
+    const bracketAt = starts[i]! + line.indexOf("[");
+    if (code[bracketAt]) continue;
     let dest = m[2]!;
     if (dest[0] === "<" && dest[dest.length - 1] === ">") dest = dest.slice(1, -1);
+    else if (!balancedDestination(dest)) continue;
+    const label = normalizeLinkLabel(m[1]!);
+    if (!label) continue;
+    prevDef = true;
+    if (defAt) defAt.add(bracketAt);
+    if (defs.has(label)) continue;
     defs.set(label, dest);
   }
   return defs;
@@ -503,25 +592,22 @@ function collectLinkDefinitions(text: string, lineBlocks?: number[]): Map<string
 
 // Every markdown link in the prose, scanned once from left to right. A "[" inside a code span,
 // an escaped "\[" and the "![" of an image open no link, because none of them is a hyperlink
-// (all three counted until the outside audit of 2026-09-26, Tek-496). A target may be written in angle
-// brackets and may carry a title in quotes, as CommonMark allows; both were missed or misread
-// before. An image nested in the link text, such as "[a ![i](x)](y)", is link content and is
-// skipped whole rather than ending the scan, so the outer hyperlink is still found; any other
-// nested "[" still ends the scan the way it always has, because CommonMark does not allow a
-// link inside a link (outside review 2026-09-28: the previous scan gave up on the whole outer
-// link the moment any nested "[" appeared, image or not). A full or collapsed reference link,
-// "[text][label]" or "[text][]", resolves against collectLinkDefinitions; an unresolved label
-// is read as plain brackets, the way it always was. A resolved target is decoded for character
-// references ("&#58;", "&amp;", ...) the same way an HTML attribute value is, so a destination
-// written as "https://host&#58;99999/" is checked as what it resolves to and not as its literal
-// source spelling (outside review 2026-09-28). The scan carries no bound and no backtracking:
-// the furthest failed plain target is remembered as before, and the closing ">", quote and line
-// end are looked up through a cache that only moves forward, so a file that repeats "[a](" or
-// "[a](x \"" stays linear.
+// (all three counted until the outside audit of 2026-09-26, Tek-496), and the brackets inside a code span neither close a label
+// nor break one (S3, LV-05). A target may be written in angle brackets and may carry a title in quotes, as CommonMark allows;
+// a plain target keeps balanced parentheses ("a_(b)") and an unbalanced one is no link (S3, WL-12); an empty target is a link
+// with an empty target (S3, LV-07). An image nested in the link text, such as "[a ![i](x)](y)", is link content and is skipped
+// whole, and the alt text of an image holds no link (S3, LV-08). Any other nested "[" still ends the scan, because CommonMark
+// does not allow a link inside a link. A label ends at the paragraph, which the block numbers of the reader say (S3, LV-06). A
+// full or collapsed reference link, "[text][label]" or "[text][]", resolves against collectLinkDefinitions; an unresolved label
+// is read as plain brackets, and so is a shortcut reference "[text]" after an inline attempt that did not parse (S3, LV-11). A
+// resolved or inline target is decoded for backslash escapes and complete character references ("&#58;", "&amp;", ...), the
+// way CommonMark does and not like an HTML attribute (S3, LV-18). The scan carries no bound and no backtracking: the closing
+// ">", quote and line end are looked up through a cache that only moves forward, and the parenthesis pairs of a plain target
+// are built once, so a file that repeats "[a](" or "[a](x \"" stays linear.
 function collectLinks(text: string, defs?: Map<string, string>, lineBlocks?: number[]): LinkEntry[] {
   const out: LinkEntry[] = [];
   const code = codeSpanMask(text, lineBlocks);
-  if (!defs) defs = collectLinkDefinitions(text, lineBlocks);
+  const refs: Map<string, string> = defs || collectLinkDefinitions(text, lineBlocks);
   const cache: Record<string, { from: number; at: number }> = Object.create(null);
   const nextIdx = (c: string, from: number): number => {
     const h = cache[c];
@@ -531,13 +617,28 @@ function collectLinks(text: string, defs?: Map<string, string>, lineBlocks?: num
     return at;
   };
   const isBlank = (c: string | undefined): boolean => c === " " || c === "\t";
-  // A blank line ends a paragraph, and a link label cannot reach across one (Tek-560). True when
-  // the line break at p is followed by a line that holds only spaces and tabs, or by the end.
+  // A blank line ends a paragraph, and a link label cannot reach across one (Tek-560); neither can it reach across a line that
+  // starts another block (S3, LV-06): a heading, a quote, a list item, a fence, a thematic break or a setext underline. The
+  // block numbers of the reader say where that is, so the label is cut exactly where the paragraph ends. True when the line
+  // break at p is followed by a blank line, by the end, or by a line of another block.
+  const blocks = lineBlocks || readBlocks(text.split("\n"));
+  let lineStarts: number[] | null = null;
+  const lineAt = (p: number): number => {
+    if (!lineStarts) {
+      lineStarts = [0];
+      for (let k = text.indexOf("\n"); k !== -1; k = text.indexOf("\n", k + 1)) lineStarts.push(k + 1);
+    }
+    let lo = 0, hi = lineStarts.length - 1;
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (lineStarts[mid]! <= p) lo = mid; else hi = mid - 1; }
+    return lo;
+  };
   const blankAt = (p: number): boolean => {
     if (text[p] !== "\n") return false;
     let q = p + 1;
     while (q < text.length && isBlank(text[q])) q++;
-    return q >= text.length || text[q] === "\n";
+    if (q >= text.length || text[q] === "\n") return true;
+    const line = lineAt(p);
+    return blocks[line + 1] !== blocks[line];
   };
   // Spaces, tabs and at most one line ending may stand around the destination and the title, as
   // CommonMark allows; "[a](  b  )" and a ")" on the next line were missed until the review of
@@ -560,44 +661,126 @@ function collectLinks(text: string, defs?: Map<string, string>, lineBlocks?: num
     }
     return null;
   };
-  let failEnd = -1;
+  // The partner of every unescaped parenthesis, paired inside one run of non-white-space characters (a destination holds no
+  // white space), or -1 for an unpaired one. Built once, on the first plain destination (S3, WL-12): readTarget jumps over
+  // a balanced pair in one step, so a destination is read in time proportional to its own length and a document that repeats
+  // "[a](x" stays linear. The previous scan stopped at the first ")" and read "a(b)" in "[x](a(b))" as the target "a(b".
+  let pairs: Int32Array | null = null;
+  const pairOf = (): Int32Array => {
+    if (pairs) return pairs;
+    const m = new Int32Array(text.length).fill(-1);
+    const stack: number[] = [];
+    for (let k = 0; k < text.length; k++) {
+      const c = text[k]!;
+      if (c === "\\") { if (k + 1 < text.length && /[!-\/:-@\[-`{-~]/.test(text[k + 1]!)) k++; }
+      else if (c === "(") stack.push(k);
+      else if (c === ")") { if (stack.length > 0) { const o = stack.pop()!; m[o] = k; m[k] = o; } }
+      else if (isDestinationEnd(c)) stack.length = 0;
+    }
+    pairs = m;
+    return m;
+  };
   const readTarget = (k: number): LinkTarget | null => {
     k = skipSpace(k);
     if (text[k] === "<") {
       const gt = nextIdx(">", k + 1);
-      if (gt === -1 || gt === k + 1) return null;
+      if (gt === -1) return null;
       const lt = nextIdx("<", k + 1);
       const nl = nextIdx("\n", k + 1);
       if ((lt !== -1 && lt < gt) || (nl !== -1 && nl < gt)) return null;
       return afterTarget(text.slice(k + 1, gt), gt + 1);
     }
-    if (k <= failEnd) return null;
+    const m = pairOf();
     let e = k;
-    while (e < text.length && text[e] !== ")" && !/\s/.test(text[e]!)) e++;
-    if (e === k) return null;
+    while (e < text.length) {
+      const c = text[e]!;
+      if (c === ")" || isDestinationEnd(c)) break;
+      if (c === "\\" && e + 1 < text.length && /[!-\/:-@\[-`{-~]/.test(text[e + 1]!)) { e += 2; continue; }
+      if (c === "(") {
+        if (m[e]! < 0) return null;
+        e = m[e]! + 1;
+        continue;
+      }
+      e++;
+    }
+    // An empty destination, "[a]()", is a link with an empty target (S3, LV-07).
+    if (e === k) return text[e] === ")" ? { target: "", end: e } : null;
     if (text[e] === ")") return { target: text.slice(k, e), end: e };
-    const found = e < text.length ? afterTarget(text.slice(k, e), e) : null;
-    if (!found) failEnd = e;
-    return found;
+    return e < text.length ? afterTarget(text.slice(k, e), e) : null;
   };
-  // An image nested in the link text is skipped whole: k is the index of its own "[", right
-  // after an unescaped "!". Its alt text is not itself scanned for nested links or images, the
-  // first unescaped "]" closes it, and it is only skipped when a target follows; a malformed
-  // image (no closing "]", no "(target)") is left for the caller to treat as an ordinary
-  // nested bracket, the way one always was.
+  // The text of a link label from j on, up to the "]" or "[" that ends it or the line break that ends the paragraph. A bracket
+  // inside a code span is code and neither closes nor opens (S3, LV-05 and U-7).
+  const scanLabel = (j: number): number => {
+    while (j < text.length && (code[j] || (text[j] !== "]" && text[j] !== "[" && !blankAt(j)))) j += !code[j] && text[j] === "\\" ? 2 : 1;
+    return j;
+  };
+  // A definition is decoded once, however many references use it: a long destination used by many labels would otherwise be
+  // decoded again for each of them.
+  const decoded = new Map<string, string>();
+  const decodeRef = (label: string, dest: string): string => {
+    let d = decoded.get(label);
+    if (d === undefined) { d = decodeDestination(dest); decoded.set(label, d); }
+    return d;
+  };
+  // The "]" that closes every "[", paired with a stack once for the whole text: a bracket inside a code span or after a
+  // backslash does not count, and the stack is emptied where the paragraph ends. An image asks for the partner of its own "["
+  // in one step, which keeps a text of "![![![" linear (S3, LV-08).
+  let closers: Int32Array | null = null;
+  const closeOf = (): Int32Array => {
+    if (closers) return closers;
+    const pairs = new Int32Array(text.length).fill(-1);
+    const stack: number[] = [];
+    for (let k = 0; k < text.length; k++) {
+      if (code[k]) continue;
+      const c = text[k];
+      if (c === "\\") k++;
+      else if (c === "[") stack.push(k);
+      else if (c === "]") { const o = stack.pop(); if (o !== undefined) pairs[o] = k; }
+      else if (c === "\n" && blankAt(k)) stack.length = 0;
+    }
+    closers = pairs;
+    return pairs;
+  };
+  // An image, "![alt](target)" or a reference image whose label has a definition: k is the index of its own "[", right after an
+  // unescaped "!". The alt text is read to the "]" that balances the "[" (S3, LV-08), so a link written inside it is image text
+  // and no link. Returns the index after the image, or null for a malformed one (no closing "]", no target, a label without a
+  // definition), which the callers treat as an ordinary bracket, the way CommonMark reads it.
   const skipImage = (k: number): number | null => {
-    let m = k + 1;
-    while (m < text.length && text[m] !== "]" && text[m] !== "[" && !blankAt(m)) m += text[m] === "\\" ? 2 : 1;
-    if (m >= text.length || text[m] !== "]" || text[m + 1] !== "(") return null;
-    const t = readTarget(m + 2);
-    return t ? t.end + 1 : null;
+    const m = closeOf()[k]!;
+    if (m < 0) return null;
+    if (text[m + 1] === "(") {
+      const t = readTarget(m + 2);
+      return t ? t.end + 1 : null;
+    }
+    if (text[m + 1] === "[") {
+      let n = m + 2;
+      while (n < text.length && text[n] !== "]" && text[n] !== "[" && text[n] !== "\n") n += text[n] === "\\" ? 2 : 1;
+      if (n >= text.length || text[n] !== "]") return null;
+      const raw = text.slice(m + 2, n);
+      const label = normalizeLinkLabel(raw === "" ? text.slice(k + 1, m) : raw);
+      return label && refs.has(label) ? n + 1 : null;
+    }
+    const own = normalizeLinkLabel(text.slice(k + 1, m));
+    return own && refs.has(own) ? m + 1 : null;
+  };
+  // True when the "[" at i sits where a link reference definition would start its line: only quote markers and a list marker
+  // before it. There a "[label]:" is the definition itself and does not resolve against itself (VN2, round 3 Tek-542); further
+  // along a line it is a shortcut reference followed by a colon (S3, LV-11). The head is read only when it is short.
+  let lineStart = 0, nextBreak = nextIdx("\n", 0);
+  const atDefinitionStart = (i: number): boolean => {
+    while (nextBreak !== -1 && nextBreak < i) { lineStart = nextBreak + 1; nextBreak = text.indexOf("\n", lineStart); }
+    return i - lineStart <= 64 && DEF_HEAD.test(text.slice(lineStart, i));
   };
   for (let i = 0; i < text.length; i++) {
     if (text[i] !== "[" || code[i] || isEscaped(text, i)) continue;
-    if (i > 0 && text[i - 1] === "!" && !isEscaped(text, i - 1)) continue;
+    if (i > 0 && text[i - 1] === "!" && !isEscaped(text, i - 1)) {
+      const after = skipImage(i);
+      if (after !== null) i = after - 1;
+      continue;
+    }
     let j = i + 1;
     for (;;) {
-      while (j < text.length && text[j] !== "]" && text[j] !== "[" && !blankAt(j)) j += text[j] === "\\" ? 2 : 1;
+      j = scanLabel(j);
       if (j >= text.length || text[j] !== "[") break;
       if (code[j] || text[j - 1] !== "!" || isEscaped(text, j - 1)) break;
       const after = skipImage(j);
@@ -610,8 +793,7 @@ function collectLinks(text: string, defs?: Map<string, string>, lineBlocks?: num
     if (text[j + 1] === "(") {
       const t = readTarget(j + 2);
       if (t) { out.push({ name: text.slice(i + 1, j), target: decodeDestination(t.target), at: i }); i = t.end; continue; }
-      i = j + 1;
-      continue;
+      // A target that does not parse leaves "[text]" to be read as a shortcut reference below (S3, LV-11).
     }
     if (text[j + 1] === "[") {
       let m = j + 2;
@@ -619,9 +801,9 @@ function collectLinks(text: string, defs?: Map<string, string>, lineBlocks?: num
       if (m < text.length && text[m] === "]") {
         const rawLabel = text.slice(j + 2, m);
         const label = normalizeLinkLabel(rawLabel === "" ? text.slice(i + 1, j) : rawLabel);
-        const dest = label && defs.get(label);
+        const dest = label ? refs.get(label) : undefined;
         if (dest !== undefined) {
-          out.push({ name: text.slice(i + 1, j), target: decodeDestination(dest), at: i });
+          out.push({ name: text.slice(i + 1, j), target: decodeRef(label, dest), at: i });
           i = m;
           continue;
         }
@@ -630,12 +812,12 @@ function collectLinks(text: string, defs?: Map<string, string>, lineBlocks?: num
       // A shortcut reference, "[text]" alone with neither "(" nor "[" right after it, resolves
       // against a definition using the link text itself as the label (VN2, round 3 Tek-542).
       // Checked last, and only here, so it never overrides the full or collapsed reference
-      // forms above. Not tried when a ":" follows: that is the definition's own "[label]:"
-      // syntax, not a use of the label, and a definition line must not resolve against itself.
-      const label = text[j + 1] === ":" ? "" : normalizeLinkLabel(text.slice(i + 1, j));
-      const dest = label ? defs.get(label) : undefined;
+      // forms above. Not tried when a ":" follows at the start of a definition line: that is the definition's own
+      // "[label]:" syntax, not a use of the label, and a definition line must not resolve against itself.
+      const label = text[j + 1] === ":" && atDefinitionStart(i) ? "" : normalizeLinkLabel(text.slice(i + 1, j));
+      const dest = label ? refs.get(label) : undefined;
       if (dest !== undefined) {
-        out.push({ name: text.slice(i + 1, j), target: decodeDestination(dest), at: i });
+        out.push({ name: text.slice(i + 1, j), target: decodeRef(label, dest), at: i });
         i = j;
         continue;
       }
@@ -666,13 +848,65 @@ function listItemHasLink(l: string, hasLink: boolean): boolean {
   return !!hasLink && /^ {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]/.test(l);
 }
 
+// Character references in Markdown text and in a destination (S3, LV-18): a decimal reference of one to seven digits, a hex one of
+// one to six and a named one, each ended by a semicolon, the way CommonMark reads them. The HTML attribute reader
+// (decodeAttributeValue) also decodes a reference without the semicolon and one with too many digits, which a Markdown
+// destination keeps literally, and it stays the reader for a Link header and for HTML. A code point CommonMark replaces
+// becomes U+FFFD, and a name that is not in the table stays as written.
+function decodeReferences(s: string): string {
+  if (!s.includes("&")) return s;
+  return s.replace(/&(?:#([0-9]{1,7})|#[xX]([0-9a-fA-F]{1,6})|([A-Za-z][A-Za-z0-9]{1,31}));/g, (all: string, dec?: string, hex?: string, name?: string) => {
+    if (name !== undefined) return namedReference(name + ";") ?? all;
+    const code = dec !== undefined ? parseInt(dec, 10) : parseInt(hex!, 16);
+    const bad = code < 9 || code === 11 || (code > 13 && code < 32) || (code > 126 && code < 160) || (code > 55295 && code < 57344)
+      || (code > 64975 && code < 65008) || (code & 65535) === 65535 || (code & 65535) === 65534 || code > 1114111;
+    return bad ? "\uFFFD" : String.fromCodePoint(code);
+  });
+}
 // The destination of a link as the URL test should see it. CommonMark lets a backslash escape any
 // ASCII punctuation character, so "https\://example.com" is the destination "https://example.com".
 // Backslash escapes and character references are read in one pass over the source, so an escaped
 // ampersand stays literal text and is not decoded a second time (Tek-560).
 function decodeDestination(s: string): string {
   const escapeAt = /(\\[!-\/:-@\[-`{-~])/;
-  return String(s).split(escapeAt).map((part) => (part.length === 2 && part[0] === "\\" && /[!-\/:-@\[-`{-~]/.test(part[1]!) ? part[1] : decodeAttributeValue(part))).join("");
+  return String(s).split(escapeAt).map((part) => (part.length === 2 && part[0] === "\\" && /[!-\/:-@\[-`{-~]/.test(part[1]!) ? part[1] : decodeReferences(part))).join("");
+}
+
+// The text a reader sees in a piece of Markdown inline text (S3, LV-15): character references decoded, the delimiter runs of
+// a code span taken off and its content kept as written, and nothing else touched. A title, a link name or a summary that is
+// empty after this renders no text, whatever the source holds. White space only is empty too.
+function visibleText(s: string): string {
+  if (!s.includes("`")) return decodeReferences(s);
+  const mask = codeSpanMask(s);
+  let out = "";
+  for (let i = 0; i < s.length; ) {
+    const spanned = mask[i] === 1;
+    let e = i;
+    while (e < s.length && (mask[e] === 1) === spanned) e++;
+    if (spanned) {
+      let n = 0;
+      while (i + n < e && s[i + n] === "`") n++;
+      out += s.slice(i + n, Math.max(i + n, e - n));
+    } else {
+      out += decodeReferences(s.slice(i, e));
+    }
+    i = e;
+  }
+  return out;
+}
+function hasVisibleText(s: string): boolean {
+  return visibleText(s).trim() !== "";
+}
+// A line of a block quote that carries text: after the ">" markers, nested ones included, something is left that renders
+// (S3, LV-15). ">>" and "> >" are empty quotes, "> > text" is not.
+function quoteHasText(line: string): boolean {
+  let p = 0;
+  for (;;) {
+    let q = p;
+    while (line[q] === " " || line[q] === "\t") q++;
+    if (line[q] !== ">") return hasVisibleText(line.slice(p));
+    p = q + 1;
+  }
 }
 
 // A setext H1: one text line indented at most three spaces whose next line is a run of "=" (also
@@ -706,6 +940,55 @@ const RAW_HTML_BLOCKS: [RegExp, string[]][] = [
   [/^ {0,3}<!\[CDATA\[/, [']]>']],
   [/^ {0,3}<![A-Za-z]/, ['>']]
 ];
+// The lines of raw HTML blocks, by the start conditions of CommonMark: types 1 to 5 end at their marker (RAW_HTML_BLOCKS), type
+// 6 (a block-level tag name) and type 7 (a complete tag alone on a line, which cannot interrupt a paragraph) end at a blank line.
+// The lines of a block hold no Markdown (S3, LV-19), so the links and definitions are read from a text where they are blank,
+// while the no-html check still reads them. A block inside a quote or a list item, or indented four columns, is not read.
+const HTML_BLOCK_NAMES = "address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h1|h2|h3|h4|h5|h6|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul";
+const HTML_TYPE6 = new RegExp("^ {0,3}</?(?:" + HTML_BLOCK_NAMES + ")(?:[ \\t]|/?>|$)", "i");
+const HTML_TYPE7 = /^ {0,3}(?:<[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[A-Za-z_:][A-Za-z0-9_.:-]*(?:[ \t]*=[ \t]*(?:[^ \t"'=<>`]+|'[^']*'|"[^"]*"))?)*[ \t]*\/?>|<\/[A-Za-z][A-Za-z0-9-]*[ \t]*>)[ \t]*$/;
+function htmlBlockLines(lines: string[], blocks: number[]): boolean[] {
+  const out = new Array<boolean>(lines.length).fill(false);
+  let open = false, ends: string[] | null = null;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i]!;
+    if (open) {
+      if (ends === null) { if (isMdBlank(l)) open = false; else out[i] = true; continue; }
+      out[i] = true;
+      if (hasRawEnd(l, ends)) open = false;
+      continue;
+    }
+    if (blocks[i]! < 0 || isMdBlank(l)) continue;
+    let matched = false;
+    for (const [start, end] of RAW_HTML_BLOCKS) {
+      const m = start.exec(l);
+      if (!m) continue;
+      matched = true;
+      out[i] = true;
+      if (!hasRawEnd(l.slice(m[0].length), end)) { open = true; ends = end; }
+      break;
+    }
+    if (matched) continue;
+    if (HTML_TYPE6.test(l) || (HTML_TYPE7.test(l) && (i === 0 || blocks[i] !== blocks[i - 1]))) {
+      out[i] = true;
+      open = true;
+      ends = null;
+    }
+  }
+  return out;
+}
+// The block numbers once the HTML blocks are taken out: a line of a block is marked -1 (no code span pairs there) and the
+// first line after one starts a block of its own, because a raw HTML block ends the paragraph it interrupted.
+function blocksAroundHtml(blocks: number[], html: boolean[]): number[] {
+  const out: number[] = [];
+  let shift = 0;
+  for (let i = 0; i < blocks.length; i++) {
+    if (html[i]) { out.push(-1); continue; }
+    if (i > 0 && html[i - 1]) shift += blocks.length + 1;
+    out.push(blocks[i]! < 0 ? blocks[i]! : blocks[i]! + shift);
+  }
+  return out;
+}
 function startsOtherBlock(line: string): boolean {
   return /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(line)
     || HTML_BLOCK_START.test(line)
@@ -745,7 +1028,7 @@ function laterSetextH1(lines: string[], fenced: boolean[]): { text: boolean[]; u
     const l = lines[i]!;
     if (rawDone) { htmlCtx = false; rawDone = false; }
     if (fenced[i]) { open = false; continue; }
-    if (l.trim() === "") { open = false; blankBefore = true; quoteCtx = false; if (!rawEnd) htmlCtx = false; continue; }
+    if (isMdBlank(l)) { open = false; blankBefore = true; quoteCtx = false; if (!rawEnd) htmlCtx = false; continue; }
     const indented = /^(?: {4}| {0,3}\t)/.test(l);
     if (/^ ?#{1,6}(?:[ \t]|$)/.test(l) || /^ ?([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(l)) listCtx = false;
     else if (/^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/.test(l)) listCtx = true;
@@ -786,7 +1069,7 @@ function h2Lines(lines: string[], fenced: boolean[]): { h2: boolean[]; under: bo
     const next = lines[i + 1];
     if (typeof next !== "string" || fenced[i + 1] || !/^ {0,3}-+[ \t]*$/.test(next)) continue;
     if (!isSetextText(l) || /^ {0,3}([-*_])(?: *\1){2,} *$/.test(l)) continue;
-    if (i > 0 && lines[i - 1]!.trim() !== "") continue;
+    if (i > 0 && !isMdBlank(lines[i - 1]!)) continue;
     h2[i] = true;
     under[i + 1] = true;
   }
@@ -825,15 +1108,15 @@ function blankCodeForHtml(prose: string, lineBlocks?: number[]): string {
 // list box such as "- [x] done" is not an entry. Returns the one-based line numbers by kind,
 // because the two kinds need different words: a look-alike marker with a link that parses is
 // counted as a link and is still no list item (Tek-745).
-function unparsedLinkEntries(lines: string[], fenced: boolean[], linkAt: Set<number>): { unparsed: number[]; marker: number[] } {
+function unparsedLinkEntries(lines: string[], fenced: boolean[], linkAt: Set<number>, code: Uint8Array, defAt: Set<number>, html: boolean[]): { unparsed: number[]; marker: number[] } {
   const unparsed: number[] = [], marker: number[] = [];
   const h2 = h2Lines(lines, fenced).h2;
   let inH2 = false, offset = 0;
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i]!;
     const start = offset;
-    offset += (fenced[i] ? 0 : l.length) + 1;
-    if (fenced[i]) continue;
+    offset += (fenced[i] || html[i] ? 0 : l.length) + 1;
+    if (fenced[i] || html[i]) continue;
     if (h2[i]) { inH2 = true; continue; }
     if (/^ {0,3}#(?:[ \t]|$)/.test(l)) { inH2 = false; continue; }
     if (!inH2) continue;
@@ -841,6 +1124,8 @@ function unparsedLinkEntries(lines: string[], fenced: boolean[], linkAt: Set<num
     if (!m) continue;
     const alt = /^[ \t]*[\u2013\u2014\u2022]/.test(l);
     const bracketAt = m[0].length - 1;
+    // A bracket inside a code span is code, and a definition line is no link entry either (S3, LV-05, LV-13 and LV-10).
+    if (code[start + bracketAt] || defAt.has(start + bracketAt)) continue;
     if (/^\[[ xX]\](?:[ \t]|$)/.test(l.slice(bracketAt))) continue;
     if (alt) marker.push(i + 1);
     else if (!linkAt.has(start + bracketAt)) unparsed.push(i + 1);
@@ -937,7 +1222,7 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
     add("content-type", "warn", "Response is plain text", "content-type is " + (ct.split(";")[0] || "missing") + ", text/plain or text/markdown is the convention");
   }
   const lines = text.split("\n");
-  const firstIdx = lines.findIndex((l) => l.trim() !== "");
+  const firstIdx = lines.findIndex((l) => !isMdBlank(l));
   const firstRaw = firstIdx === -1 ? "" : lines[firstIdx]!;
   const first = firstRaw.trim();
   // The line is read as markdown and not trimmed first. Four spaces or a tab make it an
@@ -947,16 +1232,18 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
   const title = h1Title(firstRaw);
   // A setext H1 (a text line, then a line of "=") is an H1 as well (Tek-560). The summary and the
   // later scans start after its underline.
-  const setext = title === null && firstIdx !== -1 && isSetextH1(firstRaw, lines[firstIdx + 1]);
+  const setext = title === null && firstIdx !== -1 && !startsOtherBlock(firstRaw) && isSetextH1(firstRaw, lines[firstIdx + 1]);
   const h1End = setext ? firstIdx + 1 : firstIdx;
-  if (title || setext) {
+  // A title that renders no text, "# &#32;" or a code span of spaces, is an empty H1 as well (S3, LV-15).
+  const titleBlank = title !== null && !hasVisibleText(title);
+  if ((title && !titleBlank) || setext) {
     add("h1-title", "pass", "Starts with an H1 title", JSON.stringify(cut(first, 80)));
-  } else if (title === "") {
+  } else if (titleBlank) {
     add("h1-title", "fail", "Starts with an H1 title", "the H1 has no text. The format requires the project name there");
   } else {
     add("h1-title", "fail", "Starts with an H1 title", "the first non-empty line should be a markdown H1 (# Site name, or one line of text underlined with =)");
   }
-  const afterIdx = lines.findIndex((l, i) => i > h1End && l.trim() !== "");
+  const afterIdx = lines.findIndex((l, i) => i > h1End && !isMdBlank(l));
   const afterH1 = afterIdx === -1 ? "" : lines[afterIdx]!;
   // Read the same way as the H1 check and the "late" blockquote search below: at most three
   // leading spaces, per CommonMark. A trim-first prefix test used to erase the difference, so
@@ -970,11 +1257,11 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
   // The blockquote directly under the title is one block of consecutive ">" lines, and it is the
   // summary when any line of it has text (Tek-560). ">" followed by "> Real summary" passes, and a
   // block whose every line is empty (">" alone, or ">" on several lines) is an empty blockquote and
-  // warns. A nested ">>" or "> >" line counts as text, as it did in 0.3.15.
+  // warns. A line of nothing but quote markers (">>" or "> >") has no text either, so it is empty as well (round S3, LV-15).
   let summaryLine = "";
   if (/^ {0,3}>/.test(afterH1)) {
     for (let i = afterIdx; i < lines.length && /^ {0,3}>/.test(lines[i]!); i++) {
-      if (/^ {0,3}>[ \t]*\S/.test(lines[i]!)) { summaryLine = lines[i]!; break; }
+      if (quoteHasText(lines[i]!)) { summaryLine = lines[i]!; break; }
     }
   }
   if (summaryLine !== "") {
@@ -990,7 +1277,7 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
     for (let i = h1End + 1; i < lines.length; i++) {
       if (fence[i]) continue;
       if (lateH2[i]) break;
-      if (/^ {0,3}>[ \t]*\S/.test(lines[i]!)) { late = i; break; }
+      if (/^ {0,3}>/.test(lines[i]!) && quoteHasText(lines[i]!)) { late = i; break; }
     }
     add("summary", "warn", "Blockquote summary after the title", late === -1
       ? "recommended by the format (> one-line summary), not required"
@@ -1000,7 +1287,9 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
   // listItemHasLink have allowed since 2026-08-29. Until 2026-09-10 this one line still
   // demanded column zero, so a correct file indented by one to three spaces was reported as
   // having no sections at all while its list under the same indentation counted fine.
-  const lineBlocks = readBlocks(lines);
+  const blockInfo = readBlockInfo(lines);
+  const lineBlocks = blockInfo.blocks;
+  const codeLine = blockInfo.code;
   const fenced = lineBlocks.map((block) => block < 0);
   // Computed once for both the section-list scan below and the links check further down, so a
   // reference link definition written anywhere in the prose resolves the same way for each
@@ -1010,8 +1299,14 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
   // joining the survivors let a link's own target span straight across a fenced code block, as
   // if the fence had never separated the two halves.
   const proseText = lines.map((l, i) => (fenced[i] ? "" : l)).join("\n");
-  const linkDefs = collectLinkDefinitions(proseText, lineBlocks);
-  const proseLinks = collectLinks(proseText, linkDefs, lineBlocks);
+  // Links and definitions are read from the text where the lines of raw HTML blocks are blank too (S3, LV-19); the HTML check
+  // below keeps reading proseText, so a tag in such a block still warns.
+  const htmlLine = htmlBlockLines(lines, lineBlocks);
+  const linkText = lines.map((l, i) => (fenced[i] || htmlLine[i] ? "" : l)).join("\n");
+  const linkBlocks = blocksAroundHtml(lineBlocks, htmlLine);
+  const defAt = new Set<number>();
+  const linkDefs = collectLinkDefinitions(linkText, linkBlocks, defAt);
+  const proseLinks = collectLinks(linkText, linkDefs, linkBlocks);
   // Which original line each recognized link starts on, so the section scan below can ask "does
   // this line carry a link" against the same whole-document result the links check itself uses,
   // instead of re-finding links one isolated line at a time (outside review 2026-09-28, V2).
@@ -1024,7 +1319,7 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
   {
     const starts: number[] = [];
     let offset = 0;
-    for (const pl of proseText.split("\n")) { starts.push(offset); offset += pl.length + 1; }
+    for (const pl of linkText.split("\n")) { starts.push(offset); offset += pl.length + 1; }
     let idx = 0;
     for (const link of proseLinks) {
       while (idx + 1 < starts.length && starts[idx + 1]! <= link.at) idx++;
@@ -1055,7 +1350,7 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
       // it open, as in CommonMark, but the line after it then counts only when it is indented to
       // that column too, because a lazy continuation cannot follow a fence.
       if (fenced[i]) {
-        if (l.trim() !== "" && indentWidth(l) < outerCol) itemOpen = false;
+        if (!isMdBlank(l) && indentWidth(l) < outerCol) itemOpen = false;
         if (itemOpen) { afterFence = true; itemEmpty = false; }
         continue;
       }
@@ -1070,7 +1365,7 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
       // heading, a blockquote or a thematic break ends the item. An empty marker takes no lazy
       // continuation (CommonMark): the next line counts only when indented to the content column,
       // and a blank line right after the empty marker closes the item.
-      if (l.trim() === "") { if (itemEmpty) { if (emptyOuter) itemOpen = false; itemEmpty = false; } itemGap = itemOpen; continue; }
+      if (isMdBlank(l)) { if (itemEmpty) { if (emptyOuter) itemOpen = false; itemEmpty = false; } itemGap = itemOpen; continue; }
       const fromFence = afterFence;
       afterFence = false;
       if (/^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/.test(l)) {
@@ -1091,13 +1386,15 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
           }
         }
         itemOpen = true;
-        if (inSection && !counted && listItemHasLink(l, linkedLineIdx.has(i))) { sectionsWithList++; counted = true; }
+        // Indented code after the marker (five or more spaces) is code and no file list (S3, WL-11 and LV-03).
+        if (inSection && !counted && !codeLine[i] && listItemHasLink(l, linkedLineIdx.has(i))) { sectionsWithList++; counted = true; }
         continue;
       }
       if (/^ {0,3}(?:#{1,6}(?:[ \t]|$)|>|([-*_])(?: *\1){2,} *$)/.test(l)) { itemOpen = false; continue; }
       const indented = indentWidth(l) >= outerCol;
       if (itemOpen && (!itemGap || indented) && (!itemEmpty || indented) && (!fromFence || indented)) {
-        if (inSection && !counted && linkedLineIdx.has(i)) { sectionsWithList++; counted = true; }
+        // A line the reader took as indented code, such as a link six columns in after a blank line under "- item", is code (S3, WL-11).
+        if (inSection && !counted && !codeLine[i] && linkedLineIdx.has(i)) { sectionsWithList++; counted = true; }
         itemGap = false;
         itemEmpty = false;
       } else {
@@ -1123,9 +1420,16 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
   const links = proseLinks;
   // An entry an agent can use has a name and a target with a host. An empty name and a
   // bare "https://" both counted as valid absolute links until 2026-08-29.
-  const named = links.filter((m) => m.name.trim() !== "");
+  const named = links.filter((m) => hasVisibleText(m.name));
   const unnamed = links.length - named.length;
-  const absolute = named.filter((m) => isAbsoluteHttpUrl(m.target)).length;
+  // Each distinct target is parsed once: many references to one long definition share its string.
+  const absMemo = new Map<string, boolean>();
+  const isAbs = (t: string): boolean => {
+    let r = absMemo.get(t);
+    if (r === undefined) { r = isAbsoluteHttpUrl(t); absMemo.set(t, r); }
+    return r;
+  };
+  const absolute = named.filter((m) => isAbs(m.target)).length;
   if (links.length === 0) {
     add("links", "warn", "Markdown links an agent can follow", "no markdown links found");
   } else if (unnamed > 0) {
@@ -1138,7 +1442,7 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
     add("links", "warn", "Markdown links an agent can follow", named.length + " links, " + relativeCount + " relative" + (hostless > 0 ? " and " + hostless + " that are not valid http or https URLs" : "") + ". Absolute URLs travel better when the file is read out of context");
   }
   // A list line that looks like a link entry but is not one (Tek-730) turns the links check to a warn.
-  const lookalikes = unparsedLinkEntries(lines, fenced, new Set(proseLinks.map((m) => m.at)));
+  const lookalikes = unparsedLinkEntries(lines, fenced, new Set(proseLinks.map((m) => m.at)), codeSpanMask(linkText, linkBlocks), defAt, htmlLine);
   if (lookalikes.unparsed.length + lookalikes.marker.length > 0) {
     const lk = checks[checks.length - 1]!;
     lk.status = "warn";
@@ -1188,7 +1492,11 @@ function startsTag(c: string | undefined): boolean {
 // any "=", which the tokenizer does not do either: in a="x"=">" the second "=" starts an attribute
 // NAME, and so does an "=" where a name is expected, so the quote after it is part of that name
 // and the ">" inside it ends the tag. Measured against parse5, 2026-09-12.
+// True after a readTag call that ended in "/>", where the slash is not part of an unquoted value
+// (<svg a=b/> is not self-closing, <svg a="b"/> is). The caller reads it right after the call.
+let lastTagSelfClosing = false;
 function readTag(text: string, lt: number, attrs: Record<string, string> | null): number {
+  lastTagSelfClosing = false;
   const n = text.length;
   let j = lt + 1;
   if (text[j] === "/") j++;
@@ -1244,7 +1552,7 @@ function readTag(text: string, lt: number, attrs: Record<string, string> | null)
       state = "name";
     } else {
       // selfClosing: only ">" ends the tag, anything else is read again as before attribute name.
-      if (c === ">") return j;
+      if (c === ">") { lastTagSelfClosing = true; return j; }
       state = "before";
       j--;
     }
@@ -1706,17 +2014,20 @@ function isTagBoundary(c: string | undefined): boolean {
   return c === undefined || c === ">" || c === "/" || c === " " || c === "\t" || c === "\n" || c === "\r" || c === "\f";
 }
 
-// The index just after "</name ... >", or -1 when that is not an end tag there.
+// The index just after "</name ... >", or -1 when that is not an end tag there, or -2 when it is
+// one and the input ends before the tag does (a parser drops the rest of the document with it).
+// A parser ignores the attributes of an end tag but still tokenizes them, so the end is found with
+// tagEnd: a quoted ">" does not end the tag (LV-25, WL-18, round S3, Tek-546).
 function endTagAt(lower: string, name: string, at: number): number {
-  if (!lower.startsWith("</" + name, at)) return -1;
-  let j = skipSpace(lower, at + name.length + 2);
-  if (lower[j] === "/") j = skipSpace(lower, j + 1);
-  return lower[j] === ">" ? j + 1 : -1;
+  if (!lower.startsWith("</" + name, at) || !isTagBoundary(lower[at + name.length + 2])) return -1;
+  const gt = tagEnd(lower, at);
+  return gt === -1 ? -2 : gt + 1;
 }
 
 function rawTextEnd(lower: string, name: string, from: number): number {
   for (let at = lower.indexOf("</" + name, from); at !== -1; at = lower.indexOf("</" + name, at + name.length + 2)) {
     const end = endTagAt(lower, name, at);
+    if (end === -2) return -1;
     if (end !== -1) return end;
   }
   return -1;
@@ -1727,21 +2038,31 @@ function rawTextEnd(lower: string, name: string, from: number): number {
 // the escape, not the element. Without this the legacy shape
 // <script><!-- ... <script>...</script> ... --></script> ended early and the rest of the
 // script was read as markup, which is the wrong direction. 4 of 240 000 fuzz inputs.
+//
+// Round S3 (Tek-546): the scan stops at the next "-->" as well as at the next "<", because the
+// comment close changes the state and text such as `<!-- -->` followed by a quoted "<script>"
+// hid the real end of the element (LV-23, WL-17). Leaving the double escaped state needs a tag
+// boundary after "</script": </scriptX> is script text and does not end it (LV-24). The next "-->"
+// is searched once and kept until the cursor passes it, so the scan stays linear.
 function scriptEnd(lower: string, from: number): number {
-  let i = from, escaped = false, doubleEscaped = false;
+  let i = from, escaped = false, doubleEscaped = false, close = -2;
   while (i < lower.length) {
     if (lower.startsWith("<!--", i)) { escaped = true; i += 4; continue; }
     if (escaped && lower.startsWith("-->", i)) { escaped = false; doubleEscaped = false; i += 3; continue; }
     if (escaped && !doubleEscaped && lower.startsWith("<script", i) && isTagBoundary(lower[i + 7])) { doubleEscaped = true; i += 7; continue; }
-    if (lower.startsWith("</script", i)) {
+    if (lower.startsWith("</script", i) && isTagBoundary(lower[i + 8])) {
       if (doubleEscaped) { doubleEscaped = false; i += 8; continue; }
       const end = endTagAt(lower, "script", i);
+      if (end === -2) return -1;
       if (end !== -1) return end;
-      i += 8;
-      continue;
     }
-    const next = lower.indexOf("<", i + 1);
-    i = next === -1 ? lower.length : next;
+    let next = lower.indexOf("<", i + 1);
+    if (next === -1) next = lower.length;
+    if (escaped) {
+      if (close !== -1 && close < i + 1) close = lower.indexOf("-->", i + 1);
+      if (close !== -1 && close < next) next = close;
+    }
+    i = next;
   }
   return -1;
 }
@@ -1752,8 +2073,24 @@ function scriptEnd(lower: string, from: number): number {
 // Raw text and RCDATA elements whose content is text for the tokenizer, so a "<template" or a
 // "</template" inside one is not a tag. script is read by scriptEnd, the others by rawTextEnd.
 const TEMPLATE_RAW_TEXT = ["script", "style", "title", "noscript", "noframes", "textarea", "xmp", "iframe", "noembed"];
+// One open element of foreign content (svg or math) and what its content is: html is true inside an
+// HTML integration point, where the raw text rules of HTML apply again.
+interface ForeignScope { n: string; ns: string; html: boolean }
+// The HTML integration points of the HTML standard (parsing foreign content): svg foreignObject, desc
+// and title, math mi, mo, mn, ms and mtext, and annotation-xml with an HTML encoding.
+function htmlIntegration(ns: string, tag: string, lower: string, lt: number): boolean {
+  if (ns === "svg") return tag === "foreignobject" || tag === "desc" || tag === "title";
+  if (tag === "annotation-xml") {
+    const a: Record<string, string> = {};
+    readTag(lower, lt, a);
+    return a.encoding === "text/html" || a.encoding === "application/xhtml+xml";
+  }
+  return tag === "mi" || tag === "mo" || tag === "mn" || tag === "ms" || tag === "mtext";
+}
 function templateEnd(lower: string, from: number): number {
   let depth = 1, i = from;
+  const scopes: ForeignScope[] = [];
+  const open = new Map<string, number>();
   // One forward scan: every "<" is looked at once and the cursor never moves back, so the cost
   // stays linear (restarting a search each round measured 15 686 ms on 1 MB of "</templateX").
   // Comments and raw text elements are stepped over whole, because the markers inside them are
@@ -1769,33 +2106,81 @@ function templateEnd(lower: string, from: number): number {
       i = cend;
       continue;
     }
+    // Round S3 (Tek-546): every tag is read whole with the tokenizer's own states (tagEnd), so a "<"
+    // or a ">" inside a quoted attribute value is part of the tag and not markup (LV-26, U-8,
+    // WL-16), and the attributes of an end tag are read the same way (LV-25).
     if (lower.startsWith("</template", lt)) {
-      let j = skipSpace(lower, lt + 10);
-      if (lower[j] === "/") j = skipSpace(lower, j + 1);
-      if (lower[j] !== ">") {
-        // Not an end tag: for the tokenizer the rest of the name runs to the next ">", and a
-        // "<" inside it is part of the name rather than a new tag.
-        const bogus = lower.indexOf(">", lt + 10);
-        if (bogus === -1) return -1;
-        i = bogus + 1;
-        continue;
-      }
-      depth--;
-      if (depth === 0) return j + 1;
-      i = j + 1;
-      continue;
-    }
-    if (lower.startsWith("<template", lt) && isTagBoundary(lower[lt + 9])) { depth++; i = lt + 9; continue; }
-    const rawName = TEMPLATE_RAW_TEXT.find((n) => lower.startsWith(n, lt + 1) && isTagBoundary(lower[lt + 1 + n.length]));
-    if (rawName) {
       const gt = tagEnd(lower, lt);
       if (gt === -1) return -1;
-      const rend = rawName === "script" ? scriptEnd(lower, gt + 1) : rawTextEnd(lower, rawName, gt + 1);
-      if (rend === -1) return -1;
-      i = rend;
+      // </templateX ...> is an end tag of another name: for the tokenizer it is one tag, and it
+      // does not count.
+      if (isTagBoundary(lower[lt + 10])) {
+        depth--;
+        if (depth === 0) return gt + 1;
+      }
+      i = gt + 1;
       continue;
     }
-    i = lt + 1;
+    if (lower.startsWith("<template", lt) && isTagBoundary(lower[lt + 9])) {
+      const gt = tagEnd(lower, lt);
+      if (gt === -1) return -1;
+      depth++;
+      i = gt + 1;
+      continue;
+    }
+    const c = lower[lt + 1]!;
+    const closing = c === "/";
+    if (!(c >= "a" && c <= "z") && !(closing && lower[lt + 2]! >= "a" && lower[lt + 2]! <= "z")) {
+      // "<!", "<?" and a "</" that no letter follows open a bogus comment, which the tokenizer ends
+      // at the first ">", inside quotes or not. Any other "<" is text.
+      if (startsTag(c)) {
+        const bogus = lower.indexOf(">", lt + 2);
+        if (bogus === -1) return -1;
+        i = bogus + 1;
+      } else {
+        i = lt + 1;
+      }
+      continue;
+    }
+    const gt = tagEnd(lower, lt);
+    if (gt === -1) return -1;
+    const selfClosing = lastTagSelfClosing;
+    const nameAt = lt + (closing ? 2 : 1);
+    let nameEnd = nameAt;
+    while (!isTagBoundary(lower[nameEnd])) nameEnd++;
+    const tag = lower.slice(nameAt, nameEnd);
+    const top = scopes[scopes.length - 1];
+    // Foreign content (LV-27): inside <svg> and <math> a title, script or style element is not raw
+    // text for the tokenizer, and a self-closing one opens nothing. Inside an HTML integration point
+    // (foreignObject, desc, title, mi, mo, mn, ms, mtext, annotation-xml with an HTML encoding) the
+    // HTML rules apply again, and a new <svg> or <math> there is foreign once more. Open elements are
+    // kept on a stack and an end tag closes down to its match, found through a count, so the scan
+    // stays linear. A start tag that breaks out of foreign content (a paragraph, say) is not modelled.
+    if (closing) {
+      if (open.get(tag)) {
+        for (;;) {
+          const s = scopes.pop()!;
+          open.set(s.n, open.get(s.n)! - 1);
+          if (s.n === tag) break;
+        }
+      }
+    } else if (tag === "svg" || tag === "math" || (top && !top.html)) {
+      if (!selfClosing) {
+        const ns = tag === "svg" || tag === "math" ? tag : top!.ns;
+        scopes.push({ n: tag, ns, html: tag !== "svg" && tag !== "math" && htmlIntegration(ns, tag, lower, lt) });
+        open.set(tag, (open.get(tag) || 0) + 1);
+      }
+    } else {
+      // Everything after <plaintext> is text, so the template never closes (LV-28).
+      if (tag === "plaintext") return -1;
+      if (TEMPLATE_RAW_TEXT.includes(tag)) {
+        const rend = tag === "script" ? scriptEnd(lower, gt + 1) : rawTextEnd(lower, tag, gt + 1);
+        if (rend === -1) return -1;
+        i = rend;
+        continue;
+      }
+    }
+    i = gt + 1;
   }
 }
 
@@ -1831,12 +2216,14 @@ function headOfDocument(html: unknown): string {
   const text = String(html || "").replace(/\r\n?/g, "\n");
   const lower = asciiLower(text);
   const out: string[] = [];
-  let i = 0, afterHead = false;
+  let i = 0, afterHead = false, headSeen = false;
   for (;;) {
     const lt = lower.indexOf("<", i);
     const gap = lt === -1 ? text.slice(i) : text.slice(i, lt);
     if (!isHtmlWhitespace(gap)) break;
-    out.push(gap);
+    // LV-29 (round S3, Tek-546): white space is kept only inside the head. The cap on what is read
+    // counts the head, and 65 536 spaces before the head or after </head> are not in it.
+    if (!afterHead && (headSeen || out.length > 0)) out.push(gap);
     if (lt === -1) break;
     if (lower.startsWith("<!--", lt)) {
       if (lower.startsWith("<!-->", lt)) { i = lt + 5; continue; }
@@ -1874,7 +2261,7 @@ function headOfDocument(html: unknown): string {
     }
     const name = (/^<([a-z]+)(?=[\t\n\f\r />]|$)/.exec(head14) || [])[1];
     if (!name) break;
-    if (name === "html" || name === "head") { i = gt + 1; continue; }
+    if (name === "html" || name === "head") { if (name === "head") headSeen = true; i = gt + 1; continue; }
     if (!(afterHead ? AFTER_HEAD_ELEMENTS : HEAD_ELEMENTS).includes(name)) break;   // <body> and the first body level element
     if (HEAD_SKIPPED_CONTENT.includes(name)) {
       const end = name === "template" ? templateEnd(lower, gt + 1)
@@ -1998,7 +2385,19 @@ function nextLinkValue(s: string, from: number): number {
 // as a Link response header. That is a property of the site, not of the file, so these
 // two carry their own status, "info". They are never a warn and never a fail, the
 // summary line is unchanged, and --strict keeps exiting on warnings only.
-export function findLinkRelations(html: string, linkHeader: string, readCut: boolean = false): LinkRelations {
+// RFC 8288 section 3.2: the anchor parameter names the resource a Link value is about, and without
+// one it is the page that sent the header. A value anchored to another resource describes that
+// resource, so it says nothing about the home page (LV-30, round S3, Tek-546, Erik's decision). An
+// absent or empty anchor leaves the value in use, and so does one that resolves to exactly the home
+// page address. Without a home address to compare with, an anchored value is not used.
+function describesOtherResource(anchor: string | undefined, homeUrls: readonly string[]): boolean {
+  if (anchor === undefined || anchor === "") return false;
+  if (homeUrls.length === 0) return true;
+  let resolved: string;
+  try { resolved = new URL(anchor, homeUrls[0]).href; } catch { return true; }
+  return !homeUrls.some((h) => { try { return new URL(h).href === resolved; } catch { return false; } });
+}
+export function findLinkRelations(html: string, linkHeader: string, readCut: boolean = false, homeUrls: readonly string[] = []): LinkRelations {
   const found: LinkRelations = { describedby: null, markdown: null };
   // Only the head, and only what a parser would put there: a commented-out link element,
   // one inside a script or a template, and one the parser moves into the body are all not
@@ -2032,6 +2431,7 @@ export function findLinkRelations(html: string, linkHeader: string, readCut: boo
     if (!found.markdown && href && rel.includes("alternate") && isMarkdown) found.markdown = href;
   }
   for (const link of parseLinkHeader(linkHeader)) {
+    if (describesOtherResource(link.params.anchor, homeUrls)) continue;
     const href = link.href;
     const rel = trimChars(asciiLower(link.params.rel || ""), HTTP_WHITESPACE).split(/[\t\n\r ]+/);
     const type = trimChars(asciiLower(link.params.type || ""), HTTP_WHITESPACE);
@@ -2098,7 +2498,7 @@ export async function validateHost(input: unknown, opts: ValidateHostOptions = {
       ? validateV2Discovery(null, "the home page redirects away from this host, so this was not measured")
       : home.status !== 200
         ? validateV2Discovery(null, "the home page returned HTTP " + home.status + ", so this was not measured")
-        : validateV2Discovery(findLinkRelations(home.text, home.linkHeader, home.truncated));
+        : validateV2Discovery(findLinkRelations(home.text, home.linkHeader, home.truncated, [home.finalUrl, "https://" + host + "/"]));
   } catch {
     discovery = validateV2Discovery(null, "the home page could not be read, so this was not measured");
   }
