@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { validateHost } from "../src/index.js";
+import { assertLinear } from "./growth.js";
 
 // Search layer, discovery HTML and limits, round S3 (outside audit 2026-11-05, Tek-546). The hosted
 // validator carries the same inputs and expectations in test/validator-sol-s3b.test.ts in the
-// turva-worker repo. Each test name starts with the audit item it covers.
+// turva-worker repo. Each test name starts with the audit item it covers, except the cases of
+// the discovery table, whose names start with the word "discovery".
 
 type Check = { id: string; status: string; label: string; detail: string; value?: string };
 
@@ -240,11 +242,13 @@ test("LV-29: white space inside the head still counts against the cap", async ()
   assert.match(r.detail, /in the first 65,536 characters of the head/);
 });
 
-// ---- scan cost on hostile home pages of the read limit (256 KiB) ----
-test("LV-23 to LV-28: hostile 256 KiB heads are scanned in linear time", async () => {
-  const cap = 262144;
+// ---- scan cost on hostile home pages ----
+// The head is read up to 65,536 characters, so both sizes below stay under that cap and the larger
+// one is scanned whole. The time is compared between the two sizes (test/growth.ts), not against a limit.
+test("LV-23 to LV-28: hostile heads are scanned in linear time", async () => {
+  let cap = 16384;
   const fill = (unit: string, pre: string, post = "") => pre + unit.repeat(Math.floor((cap - pre.length - post.length) / unit.length)) + post;
-  const heads: [string, string][] = [
+  const build = (): [string, string][] => [
     ["script, escape with no close and many <", fill("<a", "<head><script><!--", "</script>" + L("/llms.txt"))],
     ["script, comment closes", fill("<!-- -->", "<head><script>", "</script>" + L("/llms.txt"))],
     ["script, comment opens", fill("<!-- ", "<head><script>", "</script>" + L("/llms.txt"))],
@@ -258,11 +262,11 @@ test("LV-23 to LV-28: hostile 256 KiB heads are scanned in linear time", async (
     ["template, svg", fill("<svg><title/>", "<head><template>", "</template>" + L("/llms.txt"))],
     ["template, bogus comments", fill("<! \">", "<head><template>", "</template>" + L("/llms.txt"))],
   ];
-  for (const [name, home] of heads) {
-    const t = Date.now();
-    await rel(home);
-    const ms = Date.now() - t;
-    assert.ok(ms < 3000, name + " took " + ms + " ms");
+  const small = build();
+  cap = 61440;
+  const large = build();
+  for (let i = 0; i < small.length; i++) {
+    await assertLinear(small[i]![0], (home) => rel(home), small[i]![1], large[i]![1]);
   }
 });
 

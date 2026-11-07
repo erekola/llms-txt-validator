@@ -1,5 +1,22 @@
 # turva-llms-txt-validator changelog
 
+## 0.7.1 (2026-11-07)
+This release closes one difference from the hosted validator. The usage text now names a flag that it already accepted, and the tests that assert a scan stays linear now compare how the time grows. The checks and their results are unchanged for every address except the one in the first item below, and the links check now words a single relative link as "1 link".
+
+- A tab, a carriage return or a line feed anywhere in the typed address is removed before the address is read, as the hosted validator does. `ht<TAB>tps://example.com` and `https:<LF>//example.com` validate example.com. Until now the scheme test ran first and did not match, so the whole text was read as a host name and the run ended in "not a public domain name". Tabs and line breaks elsewhere in the address gave the same result as before, because the URL parser removes them.
+- The links check says "1 link, 1 relative" for a single relative link, as its other results already said "1 link". The hosted validator changed the same way.
+- `-h` already worked, but neither the usage text nor the README named it. The usage text now lists `--help, -h` and `--version, -V`, and the README option table lists `--help, -h`.
+- The tests that assert a scan stays linear used to compare one timing against a limit of 20 times for four times the input. A quadratic scan grows 16 times for that input, so it passed. Other tests used a fixed number of milliseconds, which a slow runner fails. Each of these tests now times two input sizes several times, keeps the fastest run of each size and fails when the ratio is above the geometric midpoint between linear and quadratic growth. For four times the input that limit is 8, and for eight times the input it is about 22.6. The one test whose input is quadratic in its parameter (nested code span pairs, 24.3 times the characters) passes its own limit of twice the size ratio, about 48.7, because the shared limit would be about 120 there and would let a rescan per pair pass. The check is in `test/growth.ts`.
+- Test fixes:
+  - The H1 cut test now puts the surrogate pair at the last kept position.
+  - In the head-only test, the only describedby link in the document is in the body, and the test checks that it is not read.
+  - The redirect-body test covers every refusal reason.
+  - The CLI tests find `bin/cli.js` from the test file instead of the working directory.
+  - The network-error test checks that the target has a masked query.
+  - The `-h` flag is tested.
+  - A test checks the line numbers of a many-link document.
+  - Test names and header comments that did not say what the test does were reworded.
+
 ## 0.7.0 (2026-11-05)
 Changes to the checks and to the discovery lines, mirrored from the hosted validator as of site 3.224.0. This release changes which files pass in both directions. The changes come from an outside read of this repository, repeated against the current code before each fix. The README list of read forms covers the Markdown rules, one by one.
 

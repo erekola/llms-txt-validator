@@ -162,7 +162,7 @@ test("LV-07: an empty destination is a relative link, also in a paragraph", asyn
     [H + G + "- [Bad](<>)\n", { lnk: "warn", lnkRe: /^2 links, 1 relative/, lnkNot: /not a Markdown link/ }],
     [H + G + "\nSee [Bad]() for more.\n", { lnk: "warn", lnkRe: /^2 links, 1 relative/ }],
     [H + G + "\nSee [Bad](<>) for more.\n", { lnk: "warn", lnkRe: /^2 links, 1 relative/ }],
-    [H + "- [Bad]()\n", { lnk: "warn", lnkRe: /^1 links, 1 relative/, lnkNot: /not a Markdown link/ }],
+    [H + "- [Bad]()\n", { lnk: "warn", lnkRe: /^1 link, 1 relative/, lnkNot: /not a Markdown link/ }],
   ]);
 });
 test("LV-07 control: a fragment link is relative as before", async () => {
@@ -202,7 +202,7 @@ test("LV-10: a line that continues a paragraph or a list item is no definition",
     [H + "- [A][a]\n- [B][b]\n[a]: https://example.com/a\n[b]: https://example.com/b\n", noLinks],
   ]);
 });
-test("LV-10 control: a definition after a paragraph, after a blank line and in a run of definitions", async () => {
+test("LV-10 control: a definition after a blank line or a heading and in a run of definitions counts, one right after a paragraph does not", async () => {
   await expectAll([
     [H + "- [Guide][g]\n\nparagraph\n[g]: https://example.com/a\n", noLinks],
     [H + "- [Guide][g]\n\n[g]: https://example.com/a\n", one],
@@ -248,7 +248,7 @@ test("LV-15: markup that renders no text passes no title, name or summary check"
     ["# Project\n> &#32;\n\n## Docs\n" + G, { sum: "warn" }],
   ]);
 });
-test("LV-15 control: visible text through a reference, a code span or a nested quote still counts", async () => {
+test("LV-15 control: visible text through a reference, a code span or a nested quote still counts, an empty quote and an empty link name still warn", async () => {
   await expectAll([
     ["# &amp; Project\n> Summary\n\n## Docs\n" + G, { h1: "pass" }],
     [H + "- [`code` name](https://example.com/a)\n", { ...one, sec: "pass" }],
@@ -297,7 +297,7 @@ test("LV-17 control: ASCII case and different labels", async () => {
 });
 
 test("LV-18: a destination is not decoded like an HTML attribute", async () => {
-  const rel = { lnk: "warn", lnkRe: /^1 links, 1 relative/ };
+  const rel = { lnk: "warn", lnkRe: /^1 link, 1 relative/ };
   await expectAll([
     [H + "- [Guide](https&#58//example.com/a)\n", rel],
     [H + "- [Guide](https&#x3a//example.com/a)\n", rel],

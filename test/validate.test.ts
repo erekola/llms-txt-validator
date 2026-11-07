@@ -4,6 +4,7 @@ import { validateLlmsTxt, summarizeChecks, normalizeHostInput, isValidPublicHost
 import type { FetchedLlmsTxt, FetchRedirect, LlmsCheck } from "../src/index.js";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { assertLinear } from "./growth.js";
 
 const good = (text: string, extra: Partial<FetchedLlmsTxt> = {}) => ({ status: 200, contentType: "text/plain; charset=utf-8", text, bytes: Buffer.byteLength(text), truncated: false, ...extra });
 const byId = (checks: LlmsCheck[], id: string): LlmsCheck => checks.find((c) => c.id === id)!;
@@ -93,6 +94,13 @@ test("host normalization and public-host gate", () => {
   assert.equal(normalizeHostInput("Example.com"), "example.com");
   assert.equal(normalizeHostInput("https://example.com/path"), "example.com");
   assert.equal(normalizeHostInput("ftp://example.com"), null);
+  // The hosted validator removes tab, CR and LF from the typed address first, so an address with one
+  // inside its scheme reads the same here (the hosted form is the canonical one).
+  assert.equal(normalizeHostInput("ht\ttps://example.com"), "example.com");
+  assert.equal(normalizeHostInput("https:\n//example.com"), "example.com");
+  assert.equal(normalizeHostInput("https:\r\n//Exam\tple.com/path"), "example.com");
+  assert.equal(normalizeHostInput("\t example.com \n"), "example.com");
+  assert.equal(normalizeHostInput("\t\r\n"), null);
   assert.equal(isValidPublicHost("example.com"), true);
   assert.equal(isValidPublicHost("127.0.0.1"), false);
   assert.equal(isValidPublicHost("intranet.local"), false);
@@ -162,6 +170,10 @@ test("findLinkRelations reads both relations from a head", () => {
   const f = findLinkRelations(html, "");
   assert.equal(f.markdown, "https://ex.com/page.md");
   assert.equal(f.describedby, "/llms.txt");
+  // The body link is the only describedby here, and the first match would win, so reading the body
+  // would show: the decoy above comes after the real link and could not tell.
+  const bodyOnly = findLinkRelations('<!doctype html><html><head><title>x</title></head><body><link rel="describedby" href="/decoy.txt"></body></html>', "");
+  assert.equal(bodyOnly.describedby, null, "a link in the body is not read");
 });
 
 test("findLinkRelations reads both relations from a Link header", () => {
@@ -237,12 +249,13 @@ test("a link tag written inside a title is text, not markup", () => {
 
 // The tag scan is by index, not by /<link\b[^>]*>/g, because that regex is quadratic on
 // input the target site controls. CodeQL reports the same shape as js/polynomial-redos.
-test("unclosed tags do not slow the scan down", () => {
-  const t0 = Date.now();
+test("unclosed tags do not slow the scan down", async () => {
   assert.deepEqual(findLinkRelations("<link".repeat(52428), ""), { describedby: null, markdown: null });
   assert.deepEqual(findLinkRelations("<script".repeat(37449), ""), { describedby: null, markdown: null });
   assert.deepEqual(findLinkRelations("", "<".repeat(65536)), { describedby: null, markdown: null });
-  assert.ok(Date.now() - t0 < 2000, "256 KB of unclosed tags must not take seconds");
+  await assertLinear("<link", (s) => findLinkRelations(s, ""), "<link".repeat(13107), "<link".repeat(52428));
+  await assertLinear("<script", (s) => findLinkRelations(s, ""), "<script".repeat(9362), "<script".repeat(37449));
+  await assertLinear("Link header", (s) => findLinkRelations("", s), "<".repeat(16384), "<".repeat(65536));
   // "<link<link<link rel=..." is ONE tag whose NAME is "link<link<link", not a link
   // element, so nothing is published. A real link element after a closed tag is read.
   assert.equal(findLinkRelations('<head><link<link<link rel="describedby" href="/real">', "").describedby, null);
@@ -250,7 +263,8 @@ test("unclosed tags do not slow the scan down", () => {
 });
 
 test("shapes a 200 000 input fuzz run against parse5 turned up (Tek-127)", () => {
-  // A "<" that no letter follows is text, and the tag after it is still a tag.
+  // A "<" that no letter follows ends the head read (the scan stops at the first text node), so a
+  // tag written after it is never read, whether or not it would be a tag.
   assert.equal(findLinkRelations('<head><<style><link rel="describedby" href="/x"></style>', "").describedby, null);
   assert.equal(findLinkRelations('<head><<link rel="describedby" href="/real">', "").describedby, null);
   // A ">" inside a quoted attribute value does not end the tag.
@@ -260,7 +274,7 @@ test("shapes a 200 000 input fuzz run against parse5 turned up (Tek-127)", () =>
   assert.equal(findLinkRelations('<head><script>var s = "x";</script/><link rel="describedby" href="/real">', "").describedby, "/real");
 });
 
-test("three shapes an independent fuzz round found", () => {
+test("three shapes an independent fuzz round found", async () => {
   // After </head> the parser is in "after head", where noscript opens the body.
   assert.equal(findLinkRelations('<head></head><noscript><link rel=describedby href=/a></noscript><link rel=describedby href=/z>', "").describedby, null);
   // "</templateX" is not an end tag: the name runs on to the next ">".
@@ -268,9 +282,8 @@ test("three shapes an independent fuzz round found", () => {
   // Inside a script, <!-- and a nested <script> mean </script> ends the escape, not the element.
   assert.equal(findLinkRelations('<head><script><!-- <script>x</script> --></script><link rel=describedby href=/real>', "").describedby, "/real");
   // A million characters of "</templateX" used to take 15 seconds; it is linear now.
-  const t0 = Date.now();
   assert.equal(findLinkRelations('<head><template>' + "</templateX".repeat(95000), "").describedby, null);
-  assert.ok(Date.now() - t0 < 2000, "an unclosed template must not take seconds");
+  await assertLinear("</templateX", (s) => findLinkRelations("<head><template>" + s, ""), "</templateX".repeat(23750), "</templateX".repeat(95000));
 });
 
 test("a link element inside a template is inert, not published", () => {
@@ -319,8 +332,7 @@ test("validateHost cannot be pointed at another path by its caller options", asy
 
 // Six false acceptances, measured 2026-08-29. Each of these used to return a pass,
 // so the validator called a file valid that breaks the format. Each one also carries a
-// positive control here, so the test cannot go green because the check is always red
-// (mds/gotchas.md 2026-08-10 (jatko 1)).
+// positive control here, so the test cannot go green because the check is always red.
 test("an indented code block is not the H1", () => {
   const bad = validateLlmsTxt(good("    # Site\n\n> s\n\n## L\n\n- [a](https://a.example/x)\n"));
   assert.equal(byId(bad, "h1-title").status, "fail");
@@ -420,7 +432,9 @@ test("a cut never ends in a lone high surrogate", () => {
   assert.equal(cut(s, 81), "a".repeat(79) + "\u{1F600}", "a cut after the pair keeps it");
   assert.equal(cut("abc", 80), "abc");
   assert.ok(Buffer.from(cut(s, 80), "utf8").toString("utf8") === cut(s, 80), "the result round-trips as UTF-8");
-  const h1 = "# " + "x".repeat(78) + "\u{1F600}y\n\n> s\n\n## D\n\n- [a](https://example.com/a)\n";
+  // The heading line starts with "# ", so 77 x put the high surrogate of the pair at index 79, the last
+  // unit a cut to 80 keeps: a plain slice(0, 80) would end the detail in a lone high surrogate.
+  const h1 = "# " + "x".repeat(77) + "\u{1F600}y\n\n> s\n\n## D\n\n- [a](https://example.com/a)\n";
   const detail = byId(validateLlmsTxt(good(h1)), "h1-title").detail;
   assert.ok(!/[\uD800-\uDBFF]$/.test(JSON.parse(detail)), "the H1 detail is cut on a code point boundary");
 });
@@ -485,7 +499,7 @@ test("an unclosed fence swallows the rest of the file, and that is the correct r
   assert.equal(byId(checks, "links").status, "warn");
 });
 
-test("a redirect body is released before the next hop and before every refusal", async () => {
+test("a redirect body is released before the next hop and before a refusal", async () => {
   const mk = (make: () => Response) => async () => make();
   const run = async (build: (n: number, body: () => object) => Response) => {
     let calls = 0, cancelled = 0;
@@ -502,6 +516,18 @@ test("a redirect body is released before the next hop and before every refusal",
   const refused = await run((n, body) => ({ status: 302, headers: new Headers({ location: "https://muu.example.org/llms.txt" }), body: body() } as unknown as Response));
   assert.equal((refused.out as FetchRedirect).reason, "off-host", "the refusal itself is unchanged");
   assert.equal(refused.cancelled, 1, "a refusal releases the body too");
+  // The other four ways out of the redirect branch release the body the same way.
+  const refusals: [string, (n: number, body: () => object) => Response][] = [
+    ["no-location", (n, body) => ({ status: 302, headers: new Headers(), body: body() } as unknown as Response)],
+    ["bad-location", (n, body) => ({ status: 302, headers: new Headers({ location: "https://" }), body: body() } as unknown as Response)],
+    ["unsafe-target", (n, body) => ({ status: 302, headers: new Headers({ location: "http://example.com/llms.txt" }), body: body() } as unknown as Response)],
+    ["too-many", (n, body) => ({ status: 302, headers: new Headers({ location: "https://" + (n % 2 ? "www." : "") + "example.com/llms.txt" }), body: body() } as unknown as Response)],
+  ];
+  for (const [reason, build] of refusals) {
+    const out = await run(build);
+    assert.equal((out.out as FetchRedirect).reason, reason);
+    assert.equal(out.cancelled, out.calls, reason + ": every redirect body of the chain is released");
+  }
   // A cancel that throws must not turn a redirect verdict into a thrown error.
   let calls = 0;
   const real = globalThis.fetch;
@@ -578,12 +604,10 @@ test("a CR in the head reads as LF, as it does after a parser's input preprocess
   assert.equal(findLinkRelations('<head>\r\n<link rel="describedby" href="/llms.txt">\r</head>', "").describedby, "/llms.txt");
 });
 
-test("many comments in the head are scanned in linear time", () => {
-  const html = "<head>" + "<!--x-->".repeat(32000) + '<link rel="describedby" href="/llms.txt"></head>';
-  const started = Date.now();
-  assert.equal(findLinkRelations(html, "").describedby, "/llms.txt");
-  const took = Date.now() - started;
-  assert.ok(took < 2000, "took " + took + " ms");
+test("many comments in the head are scanned in linear time", async () => {
+  const head = (k: number) => "<head>" + "<!--x-->".repeat(k) + '<link rel="describedby" href="/llms.txt"></head>';
+  assert.equal(findLinkRelations(head(32000), "").describedby, "/llms.txt");
+  await assertLinear("8000 and 32000 comments", (s) => findLinkRelations(s, ""), head(8000), head(32000));
 });
 
 // 0.3.5: a refused redirect target reaches the result and the check's detail masked. An outside
@@ -842,7 +866,8 @@ test("maskLocation masks an opaque-scheme target the same way an unparseable one
 });
 
 test("the CLI target field masks an opaque-scheme argument too", () => {
-  const res = spawnSync(process.execPath, ["dist/bin/cli.js", "u:AUDIT_SECRET@example.com/?token=TOPSECRET", "--json"]);
+  const cli = fileURLToPath(new URL("../bin/cli.js", import.meta.url));
+  const res = spawnSync(process.execPath, [cli, "u:AUDIT_SECRET@example.com/?token=TOPSECRET", "--json"]);
   const out = JSON.parse(res.stdout.toString());
   assert.equal(res.status, 2);
   assert.ok(!JSON.stringify(out).includes("AUDIT_SECRET"), JSON.stringify(out));

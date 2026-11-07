@@ -3,7 +3,8 @@
 // which runs this same logic inside the turva.dev Cloudflare Worker
 // (https://github.com/erekola/turva-worker). The hosted validator stays
 // canonical: if the two ever disagree, the hosted one wins and this package
-// gets the fix.
+// gets the fix. No tool compares the two sources: the mirror is kept by hand, and the
+// test files of the two repos carry the same inputs and expectations by hand too.
 
 import { readFileSync } from "node:fs";
 
@@ -165,7 +166,11 @@ export function stripControls(s: unknown): string {
 }
 
 export function normalizeHostInput(raw: unknown): string | null {
-  let s = String(raw || "").trim().toLowerCase();
+  // The hosted validator removes tab, CR and LF from the typed address before it reads it, then trims
+  // (worker.ts, the /llms-txt-validator route). The URL parser would remove the same three characters
+  // from anywhere in the string, but the scheme test below runs first, so "ht<TAB>tps://example.com"
+  // was read as a host name here and as example.com there. Same order here: strip, trim, lower-case.
+  let s = String(raw || "").replace(/[\t\r\n]/g, "").trim().toLowerCase();
   if (!s) return null;
   if (!/^[a-z][a-z0-9+.-]*:\/\//.test(s)) s = "https://" + s;
   let u: URL;
@@ -1439,7 +1444,7 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
   } else {
     const relativeCount = named.filter((m) => !/^[a-z][a-z0-9+.-]*:/i.test(m.target)).length;
     const hostless = named.length - absolute - relativeCount;
-    add("links", "warn", "Markdown links an agent can follow", named.length + " links, " + relativeCount + " relative" + (hostless > 0 ? " and " + hostless + " that are not valid http or https URLs" : "") + ". Absolute URLs travel better when the file is read out of context");
+    add("links", "warn", "Markdown links an agent can follow", named.length + " link" + (named.length === 1 ? "" : "s") + ", " + relativeCount + " relative" + (hostless > 0 ? " and " + hostless + " that are not valid http or https URLs" : "") + ". Absolute URLs travel better when the file is read out of context");
   }
   // A list line that looks like a link entry but is not one (Tek-730) turns the links check to a warn.
   const lookalikes = unparsedLinkEntries(lines, fenced, new Set(proseLinks.map((m) => m.at)), codeSpanMask(linkText, linkBlocks), defAt, htmlLine);

@@ -1,11 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { validateLlmsTxt, summarizeChecks, findLinkRelations, maskLocation } from "../src/index.js";
+import { assertLinear } from "./growth.js";
 
 // Regression tests for 0.3.16 (Tek-560, outside review 2026-10-02, items V01 to V04, V06, V07, V08
-// and V10). The hosted validator carries the same cases in test/validator-tek560.test.ts in the
-// turva-worker repo. Each case below gave the opposite result in 0.3.15, except the guards that
-// say what still holds.
+// and V10), and the cases added to this file after it: F1 to F3 and V-1 and V-2 (the blockquote and
+// list-item readings, the HTML attribute names and the fence column). The hosted validator carries
+// the same cases in test/validator-tek560.test.ts in the turva-worker repo. Each case below gave the
+// opposite result in 0.3.15, except the guards that say what still holds. The tests that say a scan
+// stays linear compare how the time grows between two input sizes (test/growth.ts), not a time.
 
 const BS = String.fromCharCode(92);
 const base = "# Example\n\n> Summary.\n\n## Docs\n\n- [Guide](https://example.com/guide)\n";
@@ -92,29 +95,22 @@ test("V07: a template marker inside a comment or a raw text element does not cou
   assert.equal(findLinkRelations("<head><template><template></template>" + link.replace("live", "fake") + "</template>" + link + "</head>", "").describedby, "/live.txt");
 });
 
-test("V07: the template scan stays linear on hostile input", () => {
+test("V07: the template scan stays linear on hostile input", async () => {
   // Both sizes stay under the 65,536 character head read, so the larger one is not cut before the scan.
-  const time = (s: string) => { const t = performance.now(); findLinkRelations("<head><template>" + s, ""); return performance.now() - t; };
   for (const unit of ["</templateX", "<template>", "<style>", "<!--", "<template><style>"]) {
     const n = Math.floor(14000 / unit.length);
-    time(unit.repeat(n));
-    const small = time(unit.repeat(n));
-    const large = time(unit.repeat(n * 4));
-    assert.ok(large / Math.max(small, 1) < 20, unit + " scaled " + (large / Math.max(small, 1)).toFixed(1) + "x for 4x the input");
+    await assertLinear(JSON.stringify(unit), (s) => findLinkRelations("<head><template>" + s, ""), unit.repeat(n), unit.repeat(n * 4));
   }
 });
 
-test("V08: maskLocation keeps its output and runs in linear time on many query keys", () => {
+test("V08: maskLocation keeps its output and runs in linear time on many query keys", async () => {
   assert.equal(maskLocation("https://u:p@h.example/p?b=1&a=2&b=3&c#f"), "https://h.example/p?b=***&a=***&c=***");
   assert.equal(maskLocation("https://h.example/?"), "https://h.example/?");
   assert.equal(maskLocation("https://h.example/"), "https://h.example/");
   assert.equal(maskLocation("https://h.example/?a=1&&b"), "https://h.example/?a=***&b=***");
-  const many = "https://h.example/?" + Array.from({ length: 8000 }, (_, i) => "k" + i + "=v").join("&");
-  const t = performance.now();
-  const out = maskLocation(many);
-  const ms = performance.now() - t;
-  assert.equal(out, "https://h.example/?" + Array.from({ length: 8000 }, (_, i) => "k" + i + "=***").join("&"));
-  assert.ok(ms < 1000, "8000 keys took " + ms.toFixed(0) + " ms");
+  const keys = (k: number) => "https://h.example/?" + Array.from({ length: k }, (_, i) => "k" + i + "=v").join("&");
+  assert.equal(maskLocation(keys(8000)), "https://h.example/?" + Array.from({ length: 8000 }, (_, i) => "k" + i + "=***").join("&"));
+  await assertLinear("2000 and 8000 query keys", (s) => maskLocation(s), keys(2000), keys(8000));
 });
 
 test("V10: an empty blockquote is not a summary", () => {
@@ -158,7 +154,7 @@ test("F2: an empty list marker takes only an indented continuation, and a fence 
   }
 });
 
-test("F3: the HTML check reads any non-space attribute name", () => {
+test("F3: the HTML check reads any non-space attribute name", async () => {
   const add = (t: string) => base + "\n" + t + "\n";
   for (const t of ["<div @click=\"x\">", "<div *ngIf=\"x\">", "<div class=a\"b\">", "<div class=a'b'>", "<div :class=\"x\" #slot>", "<div v-on:click.prevent=\"x\">", "<a title=\"1 > 2\">", "<input disabled>"]) {
     assert.equal(status(add(t), "no-html"), "warn", t);
@@ -169,26 +165,19 @@ test("F3: the HTML check reads any non-space attribute name", () => {
   // A tag still open at the end of the file has no closing bracket and does not warn.
   assert.equal(status(base + "\n<div class=\"x\"", "no-html"), "pass");
   // The scan stays linear on a long run of attributes with no closing bracket.
-  const time = (s: string) => { const t = performance.now(); status(base + "\n" + s, "no-html"); return performance.now() - t; };
   for (const unit of ["<a b ", "<a b=\"x\" c='y ", "<a @b=x\"y\" ", "<a +++ ", "<a b=\"<a b='"]) {
-    time(unit.repeat(2000));
-    const small = time(unit.repeat(10000));
-    const large = time(unit.repeat(40000));
-    assert.ok(large / Math.max(small, 1) < 20, JSON.stringify(unit) + " scaled " + (large / Math.max(small, 1)).toFixed(1) + "x for 4x the input");
+    await assertLinear(JSON.stringify(unit), (s) => status(base + "\n" + s, "no-html"), unit.repeat(10000), unit.repeat(40000));
   }
 });
 
-test("V08: maskLocation output is unchanged for repeated keys and fast on 32000 keys", () => {
+test("V08: maskLocation output is unchanged for repeated keys and stays linear on 32000 keys", async () => {
   assert.equal(maskLocation("https://h.example/?a=1&b=2&a=3&%61=4"), "https://h.example/?a=***&b=***");
-  const many = "https://h.example/?" + Array.from({ length: 32000 }, (_, i) => "k" + i + "=v").join("&");
-  const t = performance.now();
-  const out = maskLocation(many);
-  const ms = performance.now() - t;
-  assert.equal(out, "https://h.example/?" + Array.from({ length: 32000 }, (_, i) => "k" + i + "=***").join("&"));
-  assert.ok(ms < 1000, "32000 keys took " + ms.toFixed(0) + " ms");
+  const keys = (k: number) => "https://h.example/?" + Array.from({ length: k }, (_, i) => "k" + i + "=v").join("&");
+  assert.equal(maskLocation(keys(32000)), "https://h.example/?" + Array.from({ length: 32000 }, (_, i) => "k" + i + "=***").join("&"));
+  await assertLinear("8000 and 32000 query keys", (s) => maskLocation(s), keys(8000), keys(32000));
 });
 
-test("V-1: the HTML check reads a Unicode letter or digit in an attribute name", () => {
+test("V-1: the HTML check reads a Unicode letter or digit in an attribute name", async () => {
   const add = (t: string) => base + "\n" + t + "\n";
   for (const t of ["<p ä=\"x\">", "<p data-ñ=1>", "<p é>", "<p ٣=\"x\">", "<p 名前=\"x\">"]) {
     assert.equal(status(add(t), "no-html"), "warn", t);
@@ -196,12 +185,8 @@ test("V-1: the HTML check reads a Unicode letter or digit in an attribute name",
   for (const t of ["a <b + c > d", "a <b ! ? > d", "a <é> b"]) {
     assert.equal(status(add(t), "no-html"), "pass", t);
   }
-  const time = (s: string) => { const t = performance.now(); status(base + "\n" + s, "no-html"); return performance.now() - t; };
   for (const unit of ["<a ä ", "<a ä=\"x\" c='y ", "<a @ä=x\"y\" ", "<a ", "<a b=\"<a b='"]) {
-    time(unit.repeat(2000));
-    const small = time(unit.repeat(10000));
-    const large = time(unit.repeat(40000));
-    assert.ok(large / Math.max(small, 1) < 20, JSON.stringify(unit) + " scaled " + (large / Math.max(small, 1)).toFixed(1) + "x for 4x the input");
+    await assertLinear(JSON.stringify(unit), (s) => status(base + "\n" + s, "no-html"), unit.repeat(10000), unit.repeat(40000));
   }
 });
 

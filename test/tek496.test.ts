@@ -119,6 +119,12 @@ test("CLI: an unknown option, a second target and a missing target stop with exi
   const help = run("--help");
   assert.equal(help.status, 0);
   assert.match(help.stdout, /usage: llms-txt-validate/);
+  // The short form prints the same text, and the usage text and the README table both name it.
+  const short = run("-h");
+  assert.equal(short.status, 0);
+  assert.equal(short.stdout, help.stdout);
+  assert.match(help.stdout, /--help, -h/);
+  assert.match(readFileSync(fileURLToPath(new URL("../../README.md", import.meta.url)), "utf8"), /\| `--help`, `-h` \|/);
 });
 
 test("CLI: --version and -V print the installed version and exit 0 (V-04)", () => {
@@ -156,12 +162,26 @@ test("CLI: an input error under --json still carries no code field (V-05)", () =
   assert.equal("code" in parsed, false);
 });
 
-test("CLI: the target field under --json masks a user name, a password and a query (V-05)", () => {
+test("CLI: the target field of an input error under --json masks a user name, a password and a query (V-05)", () => {
+  // The .test host is refused before any read, so this is the input-error path.
   const result = spawnSync(process.execPath, [cli, "https://user:supersecret@nonexistent.invalid.test/?token=abc", "--json"], { encoding: "utf8" });
   assert.equal(result.status, 2);
   const parsed = JSON.parse(result.stdout);
   assert.doesNotMatch(result.stdout, /supersecret|user:|abc/);
   assert.match(parsed.target, /nonexistent\.invalid\.test/);
+});
+
+test("CLI: the target field of a network error under --json masks a query too (V-05)", () => {
+  // A public host with a query reaches the read, which the stubbed fetch fails, so this is the
+  // network-error path. A user name or password in the address is refused before any read.
+  const mock = new URL("fixtures/mock-network-error.js", import.meta.url).href;
+  const result = spawnSync(process.execPath, ["--import", mock, cli, "example.com/?token=supersecret", "--json"], { encoding: "utf8" });
+  assert.equal(result.status, 2);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.error, "fetch failed");
+  assert.equal(parsed.code, "EAI_AGAIN");
+  assert.doesNotMatch(result.stdout, /supersecret/);
+  assert.equal(parsed.target, "example.com/?***");
 });
 
 // Tek-564 (outside re-check W36 to W44, V1): a second H1 written as a setext heading, one text

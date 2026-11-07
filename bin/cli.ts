@@ -16,10 +16,10 @@ type Caught = { message?: string; code?: unknown; cause?: { code?: unknown } };
 
 const USAGE = [
   "usage: llms-txt-validate <domain-or-url> [--json] [--strict]",
-  "  --json     print the result as JSON (same shape as the hosted validator for a completed validation)",
-  "  --strict   exit 1 on warnings too, for CI gates",
-  "  --help     print this help",
-  "  --version  print the installed version and exit"
+  "  --json            print the result as JSON (same shape as the hosted validator for a completed validation)",
+  "  --strict          exit 1 on warnings too, for CI gates",
+  "  --help, -h        print this help",
+  "  --version, -V     print the installed version and exit"
 ];
 const KNOWN = new Set(["--json", "--strict", "--help", "-h", "--version", "-V"]);
 

@@ -1,14 +1,20 @@
 // Round 3 (Tek-542), batch Fv: Codex's third-round verification found five confirmed npm-package
 // findings in scope for this batch: V03-VN1, V03-VREG1, V03-VREG2, V03-VREG3/VN3 and V03-VN2
 // (shortcut and collapsed references only). V10-P3-01 (package side) is the sixth. Every
-// reproduction input below is the exact fixture from varmennus-V03.md / V03-vastaus.md, or the
-// exact case named in korjausohje-3.md.
+// reproduction input below is the exact fixture from the verification round's reproduction notes,
+// or the exact case named in its fix brief. Later cases were added to the same file: V13 D5-1
+// (slashless user:password@host), Tek-745 and Tek-747 (the code span mask and the block reader
+// against commonmark.js), Tek-749 (one reading of a fence) and the report-wording cases.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { validateLlmsTxt, summarizeChecks, validateHost, maskLocation } from "../src/index.js";
 import type { FetchedLlmsTxt, LlmsCheck } from "../src/index.js";
+import { assertLinear } from "./growth.js";
+
+const cli = fileURLToPath(new URL("../bin/cli.js", import.meta.url));
 
 const good = (text: string, extra: Partial<FetchedLlmsTxt> = {}) => ({ status: 200, contentType: "text/plain; charset=utf-8", text, bytes: Buffer.byteLength(text), truncated: false, ...extra });
 const byId = (checks: LlmsCheck[], id: string): LlmsCheck => checks.find((c) => c.id === id)!;
@@ -38,7 +44,7 @@ test("VN1: maskLocation masks an unrecognised-scheme userinfo when an @ precedes
 
 test("VN1: the CLI target field masks the same underscore-username case", () => {
   const res = spawnSync(process.execPath, [
-    "dist/bin/cli.js",
+    cli,
     "AUDIT_USER:AUDIT_SECRET_64923@example.com/?token=TOPSECRET#FRAGMENTSECRET", "--json"
   ]);
   const out = JSON.parse(res.stdout.toString());
@@ -66,13 +72,13 @@ test("V13 D5-1: a slashless user:password@host is masked, path@2x.png is not", (
 
 test("V13 D5-1: the CLI --json target never carries the password of a slashless user:password@host", () => {
   for (const input of ["user_name:demo-secret@example.com", "a_b:pw@example.com", "1user:pw@example.com", "user_name:pw@host?x=1"]) {
-    const res = spawnSync(process.execPath, ["dist/bin/cli.js", input, "--json"]);
+    const res = spawnSync(process.execPath, [cli, input, "--json"]);
     assert.equal(res.status, 2, input);
     const out = JSON.parse(res.stdout.toString());
     assert.ok(typeof out.target === "string" && out.target.startsWith("***@"), input + " -> " + out.target);
     assert.doesNotMatch(res.stdout.toString(), /demo-secret|pw/, input);
   }
-  const plain = JSON.parse(spawnSync(process.execPath, ["dist/bin/cli.js", "path@2x.png", "--json"]).stdout.toString());
+  const plain = JSON.parse(spawnSync(process.execPath, [cli, "path@2x.png", "--json"]).stdout.toString());
   assert.equal(plain.target, "path@2x.png");
 });
 
@@ -125,21 +131,25 @@ test("VREG2: a heading between two backtick runs still breaks a code span", () =
 });
 
 // --- V03-VREG3/VN3: the link-to-line mapping must not restart its line scan for every link.
-// Codex's exact generator (n reduced here for a fast unit test; the timed comparison itself is
-// reported separately in korjaus-Fv.md, not asserted as a hard threshold in CI).
-test("VREG3/VN3: a many-link document maps every link to a line without restarting the scan", () => {
+// Codex's exact generator (n reduced here for a fast unit test). The time itself is not asserted
+// here: what the test pins is that the line the mapping reports is the real one, in a document with
+// thousands of links and a long run of blank lines before them.
+test("VREG3/VN3: in a many-link document a link entry that is not a link is named at its real line", () => {
   const n = 3000;
-  const text = "# Example\n\n> Summary\n\n## Docs\n" + "\n".repeat(n * 8) + "- [a](https://a.com/)\n".repeat(n);
+  const text = "# Example\n\n> Summary\n\n## Docs\n" + "\n".repeat(n * 8) + "- [a](https://a.com/)\n".repeat(n) + "- [b](https://example.com/b: notes)\n";
+  const realLine = text.split("\n").findIndex((l) => l.startsWith("- [b]")) + 1;
   const checks = validateLlmsTxt(good(text));
-  assert.equal(byId(checks, "links").status, "pass");
+  assert.equal(byId(checks, "links").status, "warn");
+  assert.equal(byId(checks, "links").detail, n + " links, all absolute URLs. 1 list line looks like a link entry but is not a Markdown link (line " + realLine + ")");
   assert.match(byId(checks, "sections").detail, /1 carrying a file list/);
 });
 
 test("VREG3/VN3: the mapped line index still matches the real position for a small document", () => {
-  const text = prefix + "- [First](https://example.com/a)\n- [Second](https://example.com/b)\n";
+  const text = prefix + "- [First](https://example.com/a)\n- [Second](https://example.com/b)\n- [c](https://example.com/c: notes)\n";
   const checks = validateLlmsTxt(good(text));
   assert.equal(byId(checks, "sections").status, "pass");
   assert.match(byId(checks, "sections").detail, /1 carrying a file list/);
+  assert.equal(byId(checks, "links").detail, "2 links, all absolute URLs. 1 list line looks like a link entry but is not a Markdown link (line 9)");
 });
 
 // --- V03-VN2 (scope: shortcut and collapsed references only).
@@ -326,8 +336,8 @@ test("Tek-747: the block number on each run decides every pair as a plain scan d
   assert.ok(withSpans > 100 && crossing > 300, withSpans + " texts with a span, " + crossing + " with a backtick pair over a line break");
 });
 
-// A fixed time limit once passed here and failed on a slower CI runner (mds/gotchas.md 2026-09-27
-// (jatko 3)), so growth is compared: lengths 1..K are opened in order, a blank line follows and they are
+// A fixed time limit once passed here and failed on a slower CI runner, so growth is compared
+// (test/growth.ts): lengths 1..K are opened in order, a blank line follows and they are
 // closed in reverse, so every one of the K pairs spans most of the document and crosses a block
 // boundary. The mask with block counters grows with the input; calling the old function for each pair
 // grew about three to four times faster than the input.
@@ -340,23 +350,14 @@ test("Tek-745: the mask stays linear when many nested pairs all cross a block bo
     for (let L = K; L >= 1; L--) s += "`".repeat(L) + " ";
     return s + "\n";
   };
-  const best = (text: string) => {
-    let min = Infinity;
-    for (let r = 0; r < 15; r++) {
-      const started = process.hrtime.bigint();
-      for (let i = 0; i < 10; i++) codeSpanMask(text);
-      min = Math.min(min, Number(process.hrtime.bigint() - started) / 1e6);
-    }
-    return min;
-  };
   const small = nested(96), large = nested(480);
   assert.ok(large.length > 200 * 1024 && large.length < 256 * 1024, "the large input is 256 KiB class: " + large.length);
   // every pair crosses, so nothing is masked and nothing is consumed
   assert.equal(codeSpanMask(large).some((v) => v === 1), false);
-  best(large);
-  const ratio = best(large) / best(small);
-  const sizes = large.length / small.length;
-  assert.ok(ratio < sizes * 1.5, sizes.toFixed(1) + "x the input took " + ratio.toFixed(1) + "x as long");
+  // This test passes its own limit, sizes * 2 (about 48.7 for 24.3x the characters), because its input is quadratic in K:
+  // 5x the pairs is 24.3x the characters, so the shared limit sizes ** 1.5 (about 120) would also let a rescan per
+  // pair, which grows as sizes ** 1.5 (measured ratio about 78), pass. The current mask measures about 15 to 18.
+  await assertLinear("nested pairs", codeSpanMask, small, large, 2 * (large.length / small.length));
 });
 
 // --- Tek-747: the block reading of codeSpanMask against commonmark.js 0.31.2, the CommonMark reference implementation.
@@ -480,25 +481,12 @@ test("Tek-747: the block reader stays linear on nested markers and a deep item s
     ["a deep item stack and indented lines", (n) => { let s = fill("- ", n / 2) + "x\n"; while (s.length < n) s += " ".repeat(200) + "y `\n"; return s; }],
     ["marker-shaped lines in one paragraph", (n) => "x\n" + fill("14) a ` b\n", n)],
   ];
-  const best = (text: string) => {
-    let min = Infinity;
-    for (let r = 0; r < 5; r++) {
-      const started = process.hrtime.bigint();
-      for (let i = 0; i < 5; i++) codeSpanMask(text);
-      min = Math.min(min, Number(process.hrtime.bigint() - started) / 1e6);
-    }
-    return min;
-  };
   for (const [name, make] of shapes) {
-    const small = make(16 * 1024), large = make(128 * 1024);
-    best(large);
-    const ratio = best(large) / best(small);
-    const sizes = large.length / small.length;
-    assert.ok(ratio < sizes * 2, name + ": " + sizes.toFixed(1) + "x the input took " + ratio.toFixed(1) + "x as long");
+    await assertLinear(name, codeSpanMask, make(16 * 1024), make(128 * 1024));
   }
 });
 
-test("Tek-747: the report's sentences end in a period and carry no semicolon", () => {
+test("Tek-747: the report's sentences are separated by a period and carry no semicolon", () => {
   const report = (f: Parameters<typeof validateLlmsTxt>[0], id: string): string => byId(validateLlmsTxt(f), id).detail;
   const head = "# T\n\n> s\n\n## Docs\n\n";
   const link = "- [a](https://example.com/a)\n";

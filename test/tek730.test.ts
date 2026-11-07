@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { validateLlmsTxt, summarizeChecks } from "../src/index.js";
+import { assertLinear } from "./growth.js";
 
 // Regression tests for 0.5.0 (Tek-730, 2026-10-31). The hosted validator carries the same cases in
 // test/validator-tek730.test.ts in the turva-worker repo, together with the check that turva.dev's
@@ -54,12 +55,9 @@ test("A: an unclosed fence still hides its content, as the other checks read it"
   assert.equal(status(add("```\n<div>x</div>"), "no-html"), "pass");
 });
 
-test("A: the blanking stays linear on a document of unmatched backticks and brackets", () => {
-  const time = (s: string) => { const t = performance.now(); status(add(s), "no-html"); return performance.now() - t; };
-  time("`".repeat(50) + " <b ");
-  const small = time(("` <b " + BS + "<").repeat(2000));
-  const large = time(("` <b " + BS + "<").repeat(16000));
-  assert.ok(large < Math.max(small * 40, 1500), "8x the input took " + large + " ms against " + small + " ms");
+test("A: the blanking stays linear on a document of unmatched backticks and brackets", async () => {
+  const doc = (k: number) => ("` <b " + BS + "<").repeat(k);
+  await assertLinear("2000 and 16000 repeats", (s) => status(add(s), "no-html"), doc(2000), doc(16000));
 });
 
 test("B: a link entry with an unclosed destination warns in the links check", () => {
