@@ -189,9 +189,12 @@ export function normalizeHostInput(raw: unknown): string | null {
 // as a fetch proxy, so a typed /docs/llms.txt used to be dropped without a word while the result
 // described the root file (outside retest 2026-09-26). The result now names the unused path in an
 // info check. The case of the path is kept, and the query and fragment are never returned.
-// Mirrors worker.ts enteredPath() (v3.176.0).
+// Mirrors worker.ts enteredPath() (v3.176.0). The hosted route removes tab, CR and LF from the typed
+// address before it calls enteredPath, as normalizeHostInput does, so this function removes them
+// itself: "ht<TAB>tps://example.com" validates example.com and names no path. Without it the scheme
+// test below did not match and the URL parser read the text as a path (audit round 25, R5-1).
 export function enteredPath(raw: unknown): string {
-  let s = String(raw || "").trim();
+  let s = String(raw || "").replace(/[\t\r\n]/g, "").trim();
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) s = "https://" + s;
   let u: URL;
   try { u = new URL(s); } catch { return ""; }
@@ -2005,15 +2008,6 @@ var AFTER_HEAD_ELEMENTS = ["base", "basefont", "bgsound", "link", "meta", "nofra
 // reads it as raw text) and noframes are raw text or RCDATA, and template content is inert.
 var HEAD_SKIPPED_CONTENT = ["script", "style", "title", "noscript", "noframes", "template"];
 
-// The end of a raw text or RCDATA element: the first </name that is followed by optional
-// whitespace, an optional "/" (a parser closes on </script/> too) and a ">". Returns the
-// index after it, or -1 when the element never closes, which means the rest of the
-// document is inside it.
-function skipSpace(lower: string, j: number): number {
-  while (j < lower.length && (lower[j] === " " || lower[j] === "\t" || lower[j] === "\n" || lower[j] === "\r" || lower[j] === "\f")) j++;
-  return j;
-}
-
 // True when the character ends a tag name: whitespace, "/", ">" or the end of the input.
 function isTagBoundary(c: string | undefined): boolean {
   return c === undefined || c === ">" || c === "/" || c === " " || c === "\t" || c === "\n" || c === "\r" || c === "\f";
@@ -2029,6 +2023,10 @@ function endTagAt(lower: string, name: string, at: number): number {
   return gt === -1 ? -2 : gt + 1;
 }
 
+// The end of a raw text or RCDATA element: the first </name that is followed by optional
+// whitespace, an optional "/" (a parser closes on </script/> too) and a ">". Returns the
+// index after it, or -1 when the element never closes, which means the rest of the
+// document is inside it.
 function rawTextEnd(lower: string, name: string, from: number): number {
   for (let at = lower.indexOf("</" + name, from); at !== -1; at = lower.indexOf("</" + name, at + name.length + 2)) {
     const end = endTagAt(lower, name, at);

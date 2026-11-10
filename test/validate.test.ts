@@ -513,7 +513,7 @@ test("a redirect body is released before the next hop and before a refusal", asy
     : new Response("# Site", { headers: { "content-type": "text/plain" } }));
   assert.equal(followed.calls, 2);
   assert.equal(followed.cancelled, 1, "the hop's body is cancelled, not left to the collector");
-  const refused = await run((n, body) => ({ status: 302, headers: new Headers({ location: "https://muu.example.org/llms.txt" }), body: body() } as unknown as Response));
+  const refused = await run((n, body) => ({ status: 302, headers: new Headers({ location: "https://other.example.org/llms.txt" }), body: body() } as unknown as Response));
   assert.equal((refused.out as FetchRedirect).reason, "off-host", "the refusal itself is unchanged");
   assert.equal(refused.cancelled, 1, "a refusal releases the body too");
   // The other four ways out of the redirect branch release the body the same way.
@@ -828,6 +828,30 @@ test("enteredPath returns a typed path that is neither the root nor /llms.txt", 
   assert.equal(enteredPath("http://Example.com/Docs/LLMS.txt?token=abc#x"), "/Docs/LLMS.txt");
   assert.equal(enteredPath("example.com/LLMS.txt"), "/LLMS.txt", "the read path is lower case, so another case is not the file read");
   assert.equal(enteredPath("not a url"), "");
+});
+
+// Audit round 25, R5-1: 0.7.1 removed tab, CR and LF in normalizeHostInput only, so an address with one
+// inside its scheme validated example.com and still got an input-path row built from "https://https://...".
+test("enteredPath removes tab, CR and LF before it reads the address, as normalizeHostInput does", () => {
+  for (const typed of ["ht\ttps://example.com", "https:\n//example.com", "https:\r\n//example.com", "https://example.com\t", "\nexample.com\r"]) {
+    assert.equal(enteredPath(typed), "", JSON.stringify(typed));
+  }
+  assert.equal(enteredPath("https://example.com/do\tcs/x"), "/docs/x", "a path with a tab in it is read without the tab");
+  assert.equal(enteredPath("\t\r\n"), "");
+});
+
+test("validateHost gives a scheme with a tab, CR or LF inside it no input-path row", async () => {
+  const orig = globalThis.fetch;
+  globalThis.fetch = async () => new Response("# Example\n\n> One line.\n\n## Docs\n\n- [G](https://ex.com/g)\n", { status: 200, headers: { "content-type": "text/plain" } });
+  try {
+    for (const typed of ["ht\ttps://ex.com", "https:\n//ex.com", "https:\r\n//ex.com"]) {
+      const out = await validateHost(typed);
+      assert.equal(out.target, "https://ex.com/llms.txt", JSON.stringify(typed));
+      assert.equal(byId(out.checks, "input-path"), undefined, JSON.stringify(typed));
+    }
+  } finally {
+    globalThis.fetch = orig;
+  }
 });
 
 test("validateHost names a typed path it does not use and still reads /llms.txt", async () => {

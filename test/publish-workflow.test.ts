@@ -39,15 +39,16 @@ function needsOf(job: Job): string[] {
   return (line.split(":")[1] ?? "").replace(/[\[\]]/g, "").split(",").map((s) => s.trim()).filter(Boolean);
 }
 
-// The permission keys of a job-level "permissions:" block (four-space indent, entries at six).
+// The entries of a job-level "permissions:" block (four-space indent, entries at six) as "key: value",
+// without a trailing comment, so that a changed value fails and not only a changed key.
 function permissionsOf(job: Job): string[] {
   const i = job.lines.findIndex((l) => /^ {4}permissions:\s*$/.test(l));
   if (i < 0) return [];
   const keys: string[] = [];
   for (const l of job.lines.slice(i + 1)) {
-    const m = /^ {6}([a-z-]+):/.exec(l);
+    const m = /^ {6}([a-z-]+):[ ]*([a-z-]+)[ ]*(?:#.*)?$/.exec(l);
     if (!m) break;
-    keys.push(m[1] as string);
+    keys.push(m[1] + ": " + m[2]);
   }
   return keys;
 }
@@ -67,7 +68,7 @@ function check(text: string): string[] {
   const pub = byName("publish");
   if (pub) {
     const perms = permissionsOf(pub);
-    if (perms.join(",") !== "id-token") problems.push("publish job permissions are [" + perms.join(",") + "], expected only id-token");
+    if (perms.join(",") !== "id-token: write") problems.push("publish job permissions are [" + perms.join(",") + "], expected only id-token: write");
     if (!pub.lines.some((l) => /^\s+(?:- )?id-token:\s*write\b/.test(l))) problems.push("publish job does not hold id-token: write");
     if (pub.lines.some((l) => /uses:\s*actions\/checkout@/.test(l))) problems.push("publish job has a checkout");
     if (pub.lines.some((l) => /\bnpm (?:ci|install|test|run)\b/.test(l))) problems.push("publish job runs an install, test or script");
@@ -77,7 +78,7 @@ function check(text: string): string[] {
   if (build && !needsOf(build).includes("test")) problems.push("build does not need test");
   for (const n of ["test", "build"]) {
     const j = byName(n);
-    if (j && permissionsOf(j).join(",") !== "contents") problems.push("job " + n + " permissions are not contents: read only");
+    if (j && permissionsOf(j).join(",") !== "contents: read") problems.push("job " + n + " permissions are [" + permissionsOf(j).join(",") + "], expected only contents: read");
   }
 
   const all = codeLines(text);
@@ -101,6 +102,9 @@ test("publish.yml checks fail on broken copies", () => {
     ["id-token in build", (t) => t.replace(/(  build:\n(?:.*\n)*?    permissions:\n      contents: read)/, "$1\n      id-token: write"), /id-token appears in job build/],
     ["publish without id-token", (t) => t.replace(/      id-token: write.*\n/, "      contents: read\n"), /publish job permissions|does not hold/],
     ["publish does not need build", (t) => t.replace("  publish:\n    needs: build", "  publish:\n    needs: test"), /publish does not need build/],
+    ["contents: write in the test job", (t) => t.replace(/(  test:\n(?:.*\n)*?    permissions:\n      contents: )read/, "$1write"), /job test permissions are \[contents: write\]/],
+    ["contents: write in the build job", (t) => t.replace(/(  build:\n(?:.*\n)*?    permissions:\n      contents: )read/, "$1write"), /job build permissions are \[contents: write\]/],
+    ["id-token: read in the publish job", (t) => t.replace(/      id-token: write/, "      id-token: read"), /publish job permissions are \[id-token: read\]/],
     ["build does not need test", (t) => t.replace("  build:\n    needs: test", "  build:\n    needs: []"), /build does not need test/],
     ["tag instead of SHA", (t) => t.replace(/actions\/setup-node@[0-9a-f]{40} # v7\.1\.0/, "actions/setup-node@v7"), /not pinned by SHA/],
     ["publish path without ./", (t) => t.replace('"./release-pack/$TARBALL"', '"release-pack/$TARBALL"'), /does not start with \.\//],

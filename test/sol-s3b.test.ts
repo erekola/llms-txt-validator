@@ -25,7 +25,8 @@ async function runVia(typed: string, fetcher: (url: string, init?: RequestInit) 
   }
 }
 
-// ---- shared body: identical in the hosted test and in the package test ----
+// ---- shared body: identical in the hosted test and in the package test except one comment line in the scan cost section, which
+// ---- names test/growth.ts in the package test, where the hosted test has the helper inline ----
 type Routes = (url: string, init?: RequestInit) => Response | Promise<Response>;
 type Run = { error: string | null; target: string; summary: string; checks: Check[]; log: string[] };
 

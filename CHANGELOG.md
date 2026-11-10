@@ -1,5 +1,12 @@
 # turva-llms-txt-validator changelog
 
+## 0.7.2 (2026-11-10)
+This release closes a gap that the 0.7.1 entry below describes as closed. 0.7.1 removed a tab, a carriage return or a line feed from the typed address in the function that reads the host, but the function that reads the path still received the address as typed, so the statement that the difference was closed held for the host and not for the path. The compiled package changes in two places: the path function, and an internal function that nothing called is removed. The checks, their results, the summary and the exit code are unchanged for every address except the one in the first item below.
+
+- `ht<TAB>tps://example.com`, `https:<LF>//example.com` and the same with a carriage return validated example.com in 0.7.1 and also gained an information row, "Path in the address you entered", with the value `//example.com`. The function that finds the typed path read the address before the three characters were removed, so the scheme test did not match and the URL parser read the text as a path. The function now removes tab, CR and LF first, as the host function and the hosted validator do, and these addresses carry no path row. The 0.7.1 entry said the difference to the hosted validator was closed; for this one case it was not.
+- An internal function that skipped whitespace was never called and is removed. Its comment, which describes the raw text scan, is back above the scan it belongs to.
+- Test changes: the publish workflow test compares the value of each permission and not only its name, so `contents: write` in the test or build job fails, as does `id-token: read` in the publish job, and each case has a broken copy of the workflow that the test must reject. One test name now says what the test checks, a test host name is English, and the comment on the two shared test bodies says what differs from the hosted tests.
+
 ## 0.7.1 (2026-11-07)
 This release closes one difference from the hosted validator. The usage text now names a flag that it already accepted, and the tests that assert a scan stays linear now compare how the time grows. The checks and their results are unchanged for every address except the one in the first item below, and the links check now words a single relative link as "1 link".
 
