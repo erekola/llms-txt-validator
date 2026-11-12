@@ -147,6 +147,44 @@ test("fetchLlmsTxt refuses a non-https redirect", async () => {
   } finally { globalThis.fetch = orig; }
 });
 
+test("fetchLlmsTxt refuses a host of the wrong shape before any request", async () => {
+  const orig = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return mkOk("# Ex\n"); };
+  try {
+    for (const h of ["127.0.0.1", "localhost", "10.0.0.1", "[::1]", "intranet.local"]) {
+      const f = await fetchLlmsTxt(h) as FetchRedirect;
+      assert.equal(f.redirect, true, h);
+      assert.equal(f.reason, "unsafe-target", h);
+      assert.equal(f.location, "", h);
+    }
+    assert.equal(calls, 0, "a refused host makes no request");
+    const ok = await fetchLlmsTxt("ex.com") as FetchedLlmsTxt;
+    assert.equal(ok.status, 200);
+    assert.equal(calls, 1, "a public host still makes its request");
+  } finally { globalThis.fetch = orig; }
+});
+
+test("fetchLlmsTxt normalises the host as validateHost does before the check and the request", async () => {
+  const orig = globalThis.fetch;
+  const urls: string[] = [];
+  globalThis.fetch = async (u) => { urls.push(String(u)); return mkOk("# Ex\n"); };
+  try {
+    for (const h of ["Example.com", "example.com.", "m\u00fcnchen.de"]) await fetchLlmsTxt(h);
+    assert.deepEqual(urls, ["https://example.com/llms.txt", "https://example.com/llms.txt", "https://xn--mnchen-3ya.de/llms.txt"]);
+    urls.length = 0;
+    for (const h of ["127.0.0.1", "localhost", "10.0.0.1"]) await fetchLlmsTxt(h);
+    assert.equal(urls.length, 0);
+  } finally { globalThis.fetch = orig; }
+});
+
+test("the entry refusal of fetchLlmsTxt reads sensibly in the http-status check", async () => {
+  const f = await fetchLlmsTxt("127.0.0.1");
+  const c = validateLlmsTxt(f)[0]!;
+  assert.equal(c.status, "fail");
+  assert.equal(c.detail, "the host is not a public domain name, so no request was made");
+});
+
 test("fetchLlmsTxt caps redirect chains", async () => {
   const orig = globalThis.fetch;
   globalThis.fetch = async (u) => mkRedirect(301, u === "https://ex.com/llms.txt" ? "https://www.ex.com/llms.txt" : "https://ex.com/llms.txt");

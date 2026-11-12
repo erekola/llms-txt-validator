@@ -220,6 +220,15 @@ export function isValidPublicHost(host: string | null | undefined): boolean {
 // the same-host rule, the credential and port rejections and the 256 KiB cap are the
 // guards this function was measured against.
 export async function fetchLlmsTxt(host: string, opts: FetchOptions = {}): Promise<FetchedLlmsTxt | FetchRedirect> {
+  // Host-shape check at the entry: the same normalizeHostInput and isValidPublicHost that validateHost
+  // applies, so a direct caller gets the answer validateHost would give (upper case, one trailing dot
+  // and a raw IDN name are accepted and fetched in their normalised form). The helper is exported, so
+  // without this a direct caller could make the first request to an IP literal or an internal-use name.
+  // It checks the shape of the name only and does not resolve it. The refusal reuses the unsafe-target
+  // result with no status and no location: nothing was requested, and the typed host is not echoed back.
+  const normalized = normalizeHostInput(host);
+  if (!normalized || !isValidPublicHost(normalized)) return { redirect: true, reason: "unsafe-target", status: 0, location: "" };
+  host = normalized;
   const timeoutMs = opts.timeoutMs ?? 8000;
   const cap = opts.cap ?? 262144;
   const reqApex = host.startsWith("www.") ? host.slice(4) : host;
@@ -1185,6 +1194,7 @@ function isAbsoluteHttpUrl(t: string): boolean {
 
 function redirectFailDetail(f: FetchRedirect): string {
   if (f.reason === "off-host") return "redirects to " + f.location + ", a different host. llms.txt is host-scoped, so validate that host directly";
+  if (f.reason === "unsafe-target" && !f.location) return "the host is not a public domain name, so no request was made";
   if (f.reason === "unsafe-target") return "redirects to an unsupported target (" + f.location + "). Only https redirects to the same site are followed";
   if (f.reason === "too-many") return "too many redirects. The llms.txt is not served at a stable URL";
   return "got a " + f.status + " redirect without a usable Location header";

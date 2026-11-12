@@ -1,5 +1,13 @@
 # turva-llms-txt-validator changelog
 
+## 0.7.3 (2026-11-12)
+This release closes a gap in the exported function `fetchLlmsTxt`. The function checked every redirect target for a public host name, but it did not check the host it was given, so a program that called it directly with `127.0.0.1`, `localhost` or `10.0.0.1` made the first request to that address. `validateHost`, which the command line uses, already refused such a host before it called the function, so the command line and the checks are unchanged.
+
+- `fetchLlmsTxt` now reads its host argument the way `validateHost` does, with `normalizeHostInput` and then `isValidPublicHost`, before any request. A host that fails returns the same result the redirect guard returns for an unsafe target (`redirect: true`, `reason: "unsafe-target"`), with status `0` and an empty location, and `fetch` is not called. A public host name is fetched as before, in its normalised form: `Example.com` and `example.com.` are fetched as `example.com`, and `münchen.de` as its punycode name, so a direct caller gets the same accept or refuse answer as `validateHost`.
+- When `validateLlmsTxt` is given that refusal, the http-status check now says that the host is not a public domain name and that no request was made, where it would have printed empty parentheses. Every other redirect message is unchanged.
+- The check reads the shape of the name only, by the same rule as `validateHost`: it refuses IP literals, bracketed IPv6, ports other than 80 and 443, credentials and the internal-use endings such as `.local`. It does not resolve the name, so a public name that points at a private address still passes it. The README states the same limit, and this release does not claim that private addresses are refused.
+- Test change: a regression test calls the function with `127.0.0.1`, `localhost`, `10.0.0.1`, `[::1]` and `intranet.local` and a stubbed `fetch`, and expects the refusal and zero calls, and a public host still calls `fetch` once. A second test checks that the upper-case, trailing-dot and raw IDN forms reach `fetch` in their normalised form.
+
 ## 0.7.2 (2026-11-10)
 This release closes a gap that the 0.7.1 entry below describes as closed. 0.7.1 removed a tab, a carriage return or a line feed from the typed address in the function that reads the host, but the function that reads the path still received the address as typed, so the statement that the difference was closed held for the host and not for the path. The compiled package changes in two places: the path function, and an internal function that nothing called is removed. The checks, their results, the summary and the exit code are unchanged for every address except the one in the first item below.
 
