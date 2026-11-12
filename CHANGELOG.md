@@ -1,5 +1,8 @@
 # turva-llms-txt-validator changelog
 
+## 0.7.4 (2026-11-13)
+This release changes the README only. Long sentences and paragraphs in it are split so that each rule reads on its own, and no check, limit or default is changed. The validator, the command line and the exported functions are the same as in 0.7.3.
+
 ## 0.7.3 (2026-11-12)
 This release closes a gap in the exported function `fetchLlmsTxt`. The function checked every redirect target for a public host name, but it did not check the host it was given, so a program that called it directly with `127.0.0.1`, `localhost` or `10.0.0.1` made the first request to that address. `validateHost`, which the command line uses, already refused such a host before it called the function, so the command line and the checks are unchanged.
 
