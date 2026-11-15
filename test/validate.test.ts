@@ -924,7 +924,7 @@ test("maskLocation masks an opaque-scheme target the same way an unparseable one
   assert.ok(!masked.includes("AUDIT_SECRET"), masked);
   assert.ok(!masked.includes("TOPSECRET"), masked);
   assert.ok(!masked.includes("FRAGMENTSECRET"), masked);
-  assert.match(masked, /^u:\*\*\*@example\.com\/\?\*\*\*$/);
+  assert.equal(masked, "//***");
 });
 
 test("the CLI target field masks an opaque-scheme argument too", () => {
@@ -933,7 +933,7 @@ test("the CLI target field masks an opaque-scheme argument too", () => {
   const out = JSON.parse(res.stdout.toString());
   assert.equal(res.status, 2);
   assert.ok(!JSON.stringify(out).includes("AUDIT_SECRET"), JSON.stringify(out));
-  assert.equal(out.target, "u:***@example.com/?***");
+  assert.equal(out.target, "//***");
 });
 
 // R2 (outside review 2026-09-28): a link whose text contains an image, "[a ![i](x)](y)", used to

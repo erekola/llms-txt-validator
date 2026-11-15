@@ -84,13 +84,17 @@ npx --yes turva-llms-txt-validator example.com --json --strict
 
 Completed validation returns `{ target, summary, checks }`, where `target` is `https://<host>/llms.txt`. Each check contains `{ id, status, label, detail }`. Read `id` and `status` in a script, because the wording of `detail` can change between versions. The `input-path` check, which reports a path given with the domain and then ignored, also carries `value`, that path cut to 120 characters.
 
+The validator removes C0 and C1 control characters, bidirectional controls and invisible characters from the `detail` text, which can quote the checked site. The invisible characters are chosen by Unicode class, not from a list: every format character, which is General_Category Cf, every Default_Ignorable_Code_Point and the line and paragraph separators U+2028 and U+2029. That covers the zero-width characters, the left-to-right and right-to-left marks, the Arabic letter mark, the word joiner and the invisible math operators, the soft hyphen, the byte-order mark, the variation selectors, the combining grapheme joiner, the Hangul fillers and the tag characters U+E0000 to U+E007F. Spaces stay: the no-break space and U+2000 to U+200A. The zero-width non-joiner and joiner go too, so a quoted Persian, Malayalam or Devanagari word loses its joining marks and reads without them. The Arabic number signs U+0600 to U+0605 go as well. Until 0.8.0 only the bidi controls and the C0 and C1 controls were removed, and the invisible characters stayed in the text and in the JSON. An emoji sequence in quoted text loses its zero-width joiners and its variation selector: a family emoji reads as its members side by side, a heart written with U+FE0F shows in text style, a keycap sequence loses the selector, and a tag flag shows as its black flag. The emoji themselves, skin tone modifiers, regional indicators and combining marks stay.
+
 With `--json`, an invalid domain or a failed fetch returns `{ "error": "...", "target": "..." }` and exits with code `2`. A network error adds `code`, such as `EAI_AGAIN`. An unknown option, a second domain and a missing domain return `{ "error": "..." }` only, with no target, and also exit with code `2`.
 
 In an error report the `target` is the address given on the command line. When it parses as a URL with a host, the user name and password are removed and each query value becomes `***`. Other values follow these cases:
 
-- In a value such as `user:secret@example.com`, the part before the colon reads as a URL scheme and is shown as `user:***@example.com`.
+- In a value such as `user:secret@example.com` or `example.org:8443#a@b`, the part before the colon reads as a URL scheme and no authority follows it, so only `//***` is shown.
 - A value with no scheme and no slash is read as user information when a colon comes before its last `@`, so `user_name:secret@example.com` is shown as `***@example.com`.
 - Without that colon, as in `path@2x.png` or an e-mail address, the value is shown as given and holds no password.
+- An address that holds an `@` shows only `***`, with the scheme in front when a slash follows its colon and with no host, when a URL parser and a person would read it differently. That covers a backslash, a `?` or a `#` before the `@` and before any `/`, and a start that is not exactly a scheme, two slashes and a character other than a slash. `https://user:pa?ss@example.com/`, `https://example.org?e=a@b.com` and `https:///host?e=a@b.com` are shown as `https://***`. `user:secret@host.example://dd`, where no slash follows the scheme colon, is shown as `//***`. A redirect to such an address is reported as "a different host that this report does not name". A `/` before the `@` makes it a path, and a relative reference such as `/a@b` or `docs/@name` is masked as before.
+- Text before `://` that a URL parser does not accept as a scheme, such as `my_app://user:secret@host/p`, `1app://user:secret@host/p` or `ht tps://user:secret@host/p`, is masked from the text: everything up to the last `@` is shown as `***`.
 
 ## What it checks
 
@@ -121,18 +125,18 @@ Links are read the way CommonMark reads them for the forms listed here.
 - An unbracketed target keeps balanced parentheses, so `https://example.org/docs_(v2)` is read whole. A target with an unbalanced parenthesis is not a link, and neither is a reference definition whose destination is unbalanced. Write a target with an unbalanced parenthesis in angle brackets or escape the parenthesis. The nesting depth is not limited, where CommonMark stops at 32.
 - A link reference definition or label that spans several lines is not handled. A reference image whose label has a definition is skipped like an inline image. An empty target, `[Guide]()` or `[Guide](<>)`, is a link with an empty target and counts as a relative link.
 - A link written inside the description text of an image, as in `![alt [Guide](https://example.org/a)](https://example.org/img.png)`, does not count. An image without a target (`![alt [Guide](https://example.org/a)]`) is read the way CommonMark reads it: the inner link counts.
-- A pair of brackets inside a code span, as in `` [`Array[T]` reference](https://example.org/a) ``, neither closes nor opens a label. A link label ends where its paragraph ends. A heading, a bullet or a number starting at 1, a quote or a fence that can interrupt the paragraph therefore means there is no link.
+- A pair of brackets inside a code span, as in `` [`Array[T]` reference](https://example.org/a) ``, neither closes nor opens a label. A link label ends where its paragraph ends. A line that can interrupt the paragraph, such as a heading, a bullet, a number starting at 1, a quote or a fence, therefore means there is no link. A backslash at the end of a line is a hard line break and escapes nothing, so the label does not continue into the next line: `- [Guide\` followed by `- more](https://example.org/a)` is two list items and no link. Until 0.8.0 the label continued into the next list item or heading.
 - A shortcut reference `[Guide]` counts after a colon in the same line and after an inline target that did not parse, as in `[Guide](not a link)`. A `[Guide]:` at the start of a definition line does not resolve against itself.
 - A link reference definition opens only where a block starts. It can open, for example, after a blank line, a heading, a fence or a thematic break. It can also open at the start of a quote, as a list item or right after another definition. A line that continues a paragraph or a list item is not a definition. A definition indented four columns or more inside a list item is not read. A link written in the destination of a definition line is still counted as a link.
 - Labels match by Unicode case folding. Character references in a target need their semicolon: `https&#58;//example.org` decodes, `https&#58//example.org` stays as written. A no-break or ideographic space is part of a target. Only an ASCII space, a tab or another control character ends one.
-- Here a raw HTML block is one of types 1 to 7 of CommonMark, written at the start of the line and outside quotes and list items. Its lines hold no links, definitions or list items for the checks. The no-HTML check still reads them. A fence opener inside an HTML block is still read as a fence.
+- In this validator a raw HTML block is one of types 1 to 7 of CommonMark, and it is read only where its start is certain. The opener must be on the first line, after a blank line, or after a heading that itself stood at such a place. It must be indented at most three columns and stand outside every open list item. Under a paragraph line, a quote line, a list item line or another HTML line the opener hides nothing, and the lines after it keep their ordinary reading. The lines of a block hold no links, definitions, list items or headings for the checks. A `## Docs` line inside such a block is part of the block and no H2 section. Examples are the line between `<?x` and `?>` and the line directly under a `<div>` that stands after a blank line, with no blank line between them. Until 0.8.0 such a line counted as a section. The no-HTML check still reads them. A fence opener inside an HTML block is still read as a fence.
 - A title, a link name or a summary whose text is only character references to white space, code spans of white space or empty quote markers counts as empty: `# &#32;`, `` [` `](https://example.org/a) ``, `>>` and `> >`. A line with only a no-break or ideographic space is not a blank line.
 - A quote escaped with a backslash inside a link title, as in `[A](https://example.org/a "Ti\"tle\"")`, is not recognised, so that link is dropped. A title that spans a line break is dropped the same way.
 - Nested brackets in a link label, as in `[A [x] B](https://example.org/a)`, drop the link. A link label cannot span a blank line.
 - A backslash escape in a target is resolved before the URL test, so `https\://example.org/guide` is read as `https://example.org/guide`.
 - CR and CRLF line endings are read as LF. A setext title, which is a text line underlined with `=`, is read only when it is a single line.
 
-A heading is an H2 when `##` is followed by a space or a tab, or when it is one line of text underlined with hyphens. The text line must follow a blank line or the start of the file. A list item above a line of hyphens is not an H2, and neither is a line of hyphens after a blank line.
+A heading is an H2 when `##` is followed by a space or a tab, or when it is one line of text underlined with hyphens. The text line must follow a blank line or the start of the file. A list item above a line of hyphens is not an H2, and neither is a line of hyphens after a blank line. A line inside a raw HTML block is not a heading either.
 
 A link in a four-space indented code block counts as a link unless a backtick pair encloses it. Such a block does not count as a file list under an H2, inside a list item (five or more spaces after the marker, or six columns after a blank line under `- item`) or outside one.
 
@@ -152,9 +156,9 @@ These checks are labelled **v2** in the output. They look for link relations in 
 | 9 | Home page points to its llms.txt | `rel="describedby"` has a non-empty target | `info` |
 | 10 | Home page points to a Markdown version | `rel="alternate"` has media type `text/markdown` and a non-empty target | `info` |
 
-The validator detects these declarations without fetching their targets. It reads the first 65,536 UTF-16 code units of the head after comments and the contents of script, style, title, noscript, noframes and template elements have been set aside. When a relation is missing from a longer head, the result says that only that part was read.
+The validator detects these declarations without fetching their targets. It reads the first 65,536 UTF-16 code units of the head after comments and the contents of script, style, title, noscript, noframes and template elements have been set aside. When a relation is missing from a longer head, the result says that only that part was read. Inside a script, `<!-->` and `<!--->` end the comment escape at once, as the HTML tokenizer reads them, and a `<template>` inside `<svg>` or `<math>` is an ordinary element that opens no template level. Until 0.8.0 both shapes made the scan skip a relation that the parser puts in the head, or read one that it moves into the body.
 
-The home page itself is read up to 256 KiB. When it was cut there and no relation is found in the part that was read, the info text says "in the first 256 KiB of the home page, the part that was read, or in the Link header". A target is shown with its credentials and fragment removed and its query values masked.
+The home page itself is read up to 256 KiB. When a relation is missing, the info text names at most one of the two limits. If the head is longer than 65,536 characters, it names that limit, "in the first 65,536 characters of the head, the part that was read, or in the Link header", even when the page was also cut at 256 KiB. If the head is within the limit and the page was cut at 256 KiB, it says "in the first 256 KiB of the home page, the part that was read, or in the Link header". With neither limit reached it says "in the head or the Link header". A relation found in the part that was read is reported as found. A target is shown with its credentials and fragment removed and its query values masked.
 
 A `Link` header value that has an `anchor` parameter is used only when the anchor is empty or resolves to the home page address. This is because an anchored value describes another resource.
 
@@ -185,6 +189,28 @@ for (const check of problems) {
 
 The package also exports the helper functions and types behind `validateHost`, such as `fetchLlmsTxt`, `validateLlmsTxt` and `maskLocation`. The hosted validator keeps its own copies of the same logic. These exports are not documented here as a stable interface. Treat `validateHost` and the types above as the supported surface.
 
+### Options for library callers
+
+`validateHost(input, options)` and `fetchLlmsTxt(host, options)` take the same `ValidateHostOptions`. The command line sets none of them.
+
+| Option | Meaning | Accepted values |
+| --- | --- | --- |
+| `timeoutMs` | Time budget for one document, shared across its redirect chain. The default is `8000`. | An integer from 1 to 2,147,483,647. |
+| `cap` | Read limit in bytes per response. The default is `262144`, which is 256 KiB. | An integer from 1 to 2,097,152. |
+| `userAgent` | Value of the `user-agent` request header. | A string that the platform accepts as a header value. |
+| `accept` | Value of the `accept` request header, read by `fetchLlmsTxt`. | A string that the platform accepts as a header value. |
+| `path` | Path and query of the request, read by `fetchLlmsTxt`. The default is `/llms.txt`. | A string that starts with a single `/`. |
+
+`validateHost` pins its two reads to `/llms.txt` and `/`, each with its own `accept` value, so it ignores `path` and `accept`.
+
+A call rejects before any request is sent when an option is outside these values. `undefined` and `null` mean the default for `timeoutMs`, `cap` and `path`. `timeoutMs` and `cap` reject with a `RangeError`: `NaN`, `Infinity`, `0`, a negative number, a fraction, a string and a value above the maximum are all refused. Until 0.8.0, `NaN` and `Infinity` as `cap` switched the read limit off, and a `cap` of several megabytes could end in an internal `RangeError`. The maximum of `cap` is there because the HTML check reads the whole body with one pattern, and a body of several megabytes of attribute-like text made it run out of stack.
+
+`path` rejects with a `TypeError` when it does not start with a single `/` or holds a C0 control character or DEL. C1 control characters are accepted. This covers an empty string, `x`, `:8443/x`, `@host/x`, `//host/x`, a backslash right after the slash, an absolute URL and a query or fragment alone. Such a path could change the port or the host of the request. A path that starts with a single `/` can carry only a path and a query, and the request keeps the host that was checked.
+
+The size note of check 7 says "over 256 KiB, read truncated" whatever `cap` is, because the check only reads whether the body was cut.
+
+The package calls the `fetch` of the process it runs in. A replaced global `fetch`, a proxy or disabled certificate checks in that process change what the guarantees on this page mean.
+
 ## Use in CI
 
 Add this step to a GitHub Actions job that already has Node.js 22 or newer available. Replace `your-domain.com` with your domain:
@@ -201,7 +227,7 @@ Any CI runner with Node.js 22 or newer can run the same command. Omit `--strict`
 The default validation requests two documents: `https://<host>/llms.txt` and `https://<host>/`. Redirects may add requests, but linked pages and discovery targets are never fetched. The validator stores no results.
 
 - Timeout: eight seconds per document, shared across its redirect chain.
-- Read limit: 256 KiB, which is 262,144 bytes, per response. A file cut there gets the size note "over 256 KiB, read truncated".
+- Read limit: 256 KiB, which is 262,144 bytes, per response by default. A file cut there gets the size note "over 256 KiB, read truncated". A library caller can change the limit, see the options above.
 - Redirects: up to four hops, over HTTPS, to the same host or its `www`/apex equivalent. Off-site redirects, embedded credentials and unsupported ports are rejected. A redirect target is reported with its credentials and fragment removed and its query values masked, whether the redirect was followed or rejected.
 - Host checks: IP literals, bracketed IPv6 addresses, localhost and the internal-use TLDs `localdomain`, `local`, `internal`, `home`, `lan`, `corp`, `test`, `invalid`, `arpa` and `onion` are rejected before a request is sent. An address that holds `@`, `?` or `#` is not repeated in the error message, because it can carry a user name, a password or a query value. One trailing dot on the host you give, as in `example.com.`, is removed first. Redirect targets are checked too, and one trailing dot on a redirect target is removed the same way.
 
@@ -226,12 +252,12 @@ The strict type check found two inputs that could leave `undefined` in a check's
 GitHub Actions publishes every version from 0.1.3 on with npm trusted publishing, and each one carries a provenance attestation. To check one, install it in an empty directory and ask npm to verify the signatures. Replace the version with the one you want to check.
 
 ```sh
-mkdir verify-llms && cd verify-llms && npm init -y && npm install turva-llms-txt-validator@0.7.4 --ignore-scripts && npm audit signatures
+mkdir verify-llms && cd verify-llms && npm init -y && npm install turva-llms-txt-validator@0.8.0 --ignore-scripts && npm audit signatures
 ```
 
 `npm audit signatures` checks the registry signature and the provenance attestation of each installed package that has one. The attestation of this package names three things to compare with what you expect: the repository `github.com/erekola/llms-txt-validator`, the workflow file `.github/workflows/publish.yml` and the commit that produced the tarball. The npm version page shows them under Provenance.
 
-Tag `v0.7.4` must point at that same commit, and `gh api repos/erekola/llms-txt-validator/commits/v0.7.4 --jq .sha` prints it. A mismatch is a reason not to use that version. Provenance proves which workflow built a release and from which commit. It does not prove that the code is safe, so reading the source and the dependencies stays your job.
+Tag `v0.8.0` must point at that same commit, and `gh api repos/erekola/llms-txt-validator/commits/v0.8.0 --jq .sha` prints it. A mismatch is a reason not to use that version. Provenance proves which workflow built a release and from which commit. It does not prove that the code is safe, so reading the source and the dependencies stays your job.
 
 ## Development
 

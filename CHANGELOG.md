@@ -1,5 +1,35 @@
 # turva-llms-txt-validator changelog
 
+## 0.8.0 (2026-11-15)
+This release mirrors repairs in the hosted validator. Verdicts move for a backslash before a line ending and for headings inside raw HTML blocks, and the library options `path`, `cap` and `timeoutMs` are stricter. The README describes each rule.
+
+What passes or fails now:
+
+- A backslash at the end of a line escapes nothing, so it no longer carries a link label into the next list item or heading. A link that passed can now warn, and one that warned can now pass.
+- A heading inside a raw HTML block is no section. A file whose only H2 lines sat in such blocks now warns about missing sections, and its summary moves from `valid` to `valid with warnings`. A block opener hides headings only where its start is certain: on the first line, after a blank line or after a heading that stood at such a place, outside every list item. Under a paragraph, quote, list item or HTML line it hides nothing.
+- The head scan reads `<!-->` and `<!--->` in a script, and a template inside svg or math, as the HTML tokenizer does. The two discovery lines can move between `info` and `pass`. The summary does not move.
+
+Text in results:
+
+- An address in an error report or a redirect refusal shows less. When a URL parser and a reader would split the user information differently, the report shows only `***`, with the scheme in front when a slash follows its colon, and names no host. `https://user:pa?ss@example.com/` shows as `https://***`, and `example.org:8443#a@b` shows as `//***`. Every refusal that prints a location follows the rule, `bad-location` and `too-many` included.
+- The validator removes invisible characters from a `detail`. It chooses them by Unicode class. Joiners go from emoji sequences and from Persian, Malayalam and Devanagari words. Variation selectors, the soft hyphen and the Hangul fillers go as well.
+
+Speed:
+
+- The link scan is linear for nested image openers, for `![` followed by angle bracket targets and for many references to one long definition. A text of 65,536 nested openers took 3,791 ms and takes 9 ms.
+
+Library options:
+
+- `opts.path` must start with a single `/` and hold no C0 control character or DEL. Values such as `x`, `:8443/x`, `//host/x` and an absolute URL used to change the request. They reject with a `TypeError` now.
+- `opts.cap` must be an integer from 1 to 2,097,152. `NaN` and `Infinity` used to switch the limit off. A numeric string such as `"1000"` or a fraction such as `1000.5` worked in 0.7.4 and rejects with a `RangeError` now, as does a value above the maximum.
+- `opts.timeoutMs` must be an integer from 1 to 2,147,483,647. `NaN`, `Infinity` and fractions used to throw from `AbortSignal.timeout` at the top of the request loop. They reject with a `RangeError` before any request now.
+- `undefined` and `null` mean the default. `validateHost` and the command line are unchanged for valid use.
+
+Repository:
+
+- `ci.yml` checks out with `persist-credentials: false`, and the test jobs of `ci.yml` and `publish.yml` have a 15 minute timeout.
+- A new test file covers each change. The cost tests compare the run times of inputs that grow in size, and no test uses a limit in milliseconds.
+
 ## 0.7.4 (2026-11-13)
 This release changes the README only. Long sentences and paragraphs in it are split so that each rule reads on its own, and no check, limit or default is changed. The validator, the command line and the exported functions are the same as in 0.7.3.
 

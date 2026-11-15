@@ -32,6 +32,7 @@ jobs:
   test:
     # Same matrix and commands as ci.yml (see the comment there for why Windows and Node 24).
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     permissions:
       contents: read
     strategy:
