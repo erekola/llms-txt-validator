@@ -1,5 +1,24 @@
 # turva-llms-txt-validator changelog
 
+## 0.8.3 (2026-11-22)
+This release repairs four places where a result or an error showed user information, after an independent rerun against 0.8.1. It mirrors the same repairs in the hosted validator.
+
+What passes or fails now:
+
+- Nothing changes. Every check keeps the status 0.8.2 gave it, and the same inputs are refused.
+
+Text in results:
+
+- A followed redirect whose `Location` reads as user information no longer shows the password in the address it reached. In 0.8.2 a same-host `Location: user_name:secret@example.com` was resolved into `https://example.com/user_name:secret@example.com`, and the `http-status` detail showed that address. It is now shown as `https://example.com/***`. An address reached after it is shown the same way while its `Location` keeps part of the earlier path or query. An address whose `Location` keeps none of it, such as an absolute address or a path from the root, is shown as usual. `fetchLlmsTxt` returns the shown form in the new field `shownFinalUrl`, set only in that case, and `finalUrl` stays the address as the parser resolved it.
+- A redirect refused as one hop too many after such a redirect is read without the hidden address as its base.
+- The `input-path` value is `/***` when the address holds an `@` and its masked form does not show that path. In 0.8.2 `https://corp.example\erik:secret@host.example` gave the value `/erik:secret@host.example`.
+- A refused address with an `@`, a `?` or a `#` names the host a URL parser reads from it only when that host is the text right after the last `@`, or when the address holds no `@`. In 0.8.2 `//user?@example.com` gave `not a public domain name: user`, with the user name.
+- An unknown option is named by its dashes and the letters, digits and dashes after them. In 0.8.2 its first 40 characters were repeated, so a target typed with a leading dash, as in `-u:secret@example.com`, showed the password.
+
+Tests:
+
+- test/redirect-2026-11-22.test.ts is new. It covers each case above in the library and the command line, and a followed redirect that hides nothing, which 0.8.2 had no test for.
+
 ## 0.8.2 (2026-11-22)
 Nothing changes in what the validator reports. This release replaces three trims whose time grew with the square of a run of spaces inside the value. CodeQL code scanning flagged two of them on 0.8.1, and the third, built from a string at run time, had the same form. The hosted validator gets the same change.
 

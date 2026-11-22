@@ -41,6 +41,9 @@ export type FetchedLlmsTxt = {
   truncated: boolean;
   redirectedFrom: string | null;
   finalUrl: string;
+  // Set only when a followed redirect wrote user information that the URL parser moved into the path or the query of
+  // finalUrl. It is the address a report shows in place of finalUrl: the scheme, the host and "/***".
+  shownFinalUrl?: string;
 };
 export type FetchRedirect = {
   redirect: true;
@@ -368,7 +371,22 @@ export function enteredPath(raw: unknown): string {
   let u: URL;
   try { u = new URL(s); } catch { return ""; }
   const path = u.pathname;
-  return path === "/" || path === "" || path === "/llms.txt" ? "" : path;
+  if (path === "/" || path === "" || path === "/llms.txt") return "";
+  // A typed address whose user information the parser moved into the path, as in
+  // https://corp.example\erik:password@host.example, read as host corp.example and path
+  // /erik:password@host.example, repeated the password in this value (n7, independent rerun
+  // 2026-11-22). The path is shown only when maskLocation shows it for the whole typed address.
+  return s.includes("@") && !maskLocation(s).includes(path) ? "/***" : path;
+}
+
+// The host a refused typed address is named by in an error. An address with an @, a ? or a # is named by the host the
+// parser reads from it, and only when that host is the text right after the last @, or the text has no @: with a ? or #
+// before the @ the parser reads the user name as the host, and //user?@example.com named "user" (n8, independent
+// rerun 2026-11-22). Mirrors worker.ts validatorEcho().
+function typedHostEcho(raw: string): string {
+  const host = normalizeHostInput(raw) || "";
+  const at = raw.lastIndexOf("@");
+  return host && (at < 0 || raw.slice(at + 1).toLowerCase().startsWith(host)) ? host : "";
 }
 
 export function isValidPublicHost(host: string | null | undefined): boolean {
@@ -442,6 +460,7 @@ export async function fetchLlmsTxt(host: string, opts: FetchOptions = {}): Promi
     if (first.protocol !== "https:" || first.hostname !== host || first.port !== "" || first.username !== "" || first.password !== "") throw new Error("the request address does not keep the host that was checked");
   }
   let redirectedFrom: string | null = null;
+  let hidden = false;
   // One budget for the whole redirect chain, not one per hop. Mirrors the hosted validator
   // (turva.dev/llms-txt-validator), which is canonical: with five hops a per-hop signal made
   // the caller's timeout five times longer than the value it passed in.
@@ -460,9 +479,10 @@ export async function fetchLlmsTxt(host: string, opts: FetchOptions = {}): Promi
       try { await res.body?.cancel(); } catch { /* the verdict below is the answer */ }
       const loc = res.headers.get("location") || "";
       if (!loc) return { redirect: true, reason: "no-location", status: res.status, location: "" };
-      if (hop >= 4) return { redirect: true, reason: "too-many", status: res.status, location: cut(maskLocation(loc, url), 120) };
+      if (hop >= 4) return { redirect: true, reason: "too-many", status: res.status, location: cut(maskLocation(loc, hidden ? undefined : url), 120) };
       let next: URL;
-      try { next = new URL(loc, url); } catch { return { redirect: true, reason: "bad-location", status: res.status, location: cut(maskLocation(loc, url), 120) }; }
+      try { next = new URL(loc, url); } catch { return { redirect: true, reason: "bad-location", status: res.status, location: cut(maskLocation(loc, hidden ? undefined : url), 120) }; }
+      const parsedHref = next.href;
       // LV-22 (round S3, Tek-546): one trailing dot names the same host, as it does in the typed
       // address (normalizeHostInput), so a redirect to https://example.com./ is a same-site redirect.
       // A second dot still fails the host test below.
@@ -471,6 +491,19 @@ export async function fetchLlmsTxt(host: string, opts: FetchOptions = {}): Promi
       const twin = (next.hostname.startsWith("www.") ? next.hostname.slice(4) : next.hostname) === reqApex;
       if (!safeTarget) return { redirect: true, reason: "unsafe-target", status: res.status, location: cut(maskLocation(next.href, undefined, loc), 120) };
       if (!twin) return { redirect: true, reason: "off-host", status: res.status, location: cut(maskLocation(next.href, undefined, loc), 120) };
+      // A followed Location that reads as user information, as user_name:password@example.com resolved into
+      // https://example.com/user_name:password@example.com, kept the password in the address the report showed (n1,
+      // independent rerun 2026-11-22). The Location is read as written, against the address it came from, as a refused
+      // one is. When that reading masks more than the parsed address shows, the chain is marked: every later address
+      // that keeps its path is resolved from this one, so the final address is shown as its scheme, its host and "/***", and a later
+      // refused Location is read without this address as its base.
+      // A later Location that keeps nothing of the marked address, such as an absolute address or a path from the root,
+      // clears the mark: it is resolved against the marked address and against the same origin with every path segment
+      // and the query replaced, at the same depth, and when both give the same address the path and the query of the
+      // marked address did not reach it. Bases one segment deep let ".." and "../x" clear the mark while the hidden
+      // segments stayed (F1 of the seventh check, 2026-11-22).
+      const inheritsBase = (() => { const u0 = new URL(url); let n = 0; const alt = u0.origin + u0.pathname.replace(/[^\/]+/g, () => "zz9q" + n++) + (u0.search ? "?zz9q" : ""); try { return new URL(loc, url).href !== new URL(loc, alt).href; } catch { return true; } })();
+      hidden = maskLocation(loc, url) !== maskLocation(parsedHref) || maskLocation(next.href, undefined, loc) !== maskLocation(next.href) || (hidden && inheritsBase);
       if (!redirectedFrom) redirectedFrom = url;
       url = next.href;
       continue;
@@ -504,7 +537,8 @@ export async function fetchLlmsTxt(host: string, opts: FetchOptions = {}): Promi
       bytes,
       truncated,
       redirectedFrom,
-      finalUrl: url
+      finalUrl: url,
+      ...(hidden ? { shownFinalUrl: "https://" + new URL(url).host + "/***" } : {})
     };
   }
 }
@@ -1495,7 +1529,9 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
   // detail as sent. An input with redirectedFrom and no finalUrl, which fetchLlmsTxt never returns but a
   // caller of this function can pass, names the address it was redirected from alone instead of ending
   // in "to undefined" (Tek-668, NULL-2, mirrored from worker.ts).
-  add("http-status", "pass", "File exists at /llms.txt", f.redirectedFrom ? "HTTP 200, followed a redirect from " + maskLocation(f.redirectedFrom) + (f.finalUrl ? " to " + maskLocation(f.finalUrl) : "") : "HTTP 200");
+  // shownFinalUrl, when fetchLlmsTxt set it, stands in for finalUrl (n1, independent rerun 2026-11-22).
+  const shownFinal = f.shownFinalUrl !== undefined ? maskLocation(f.shownFinalUrl) : f.finalUrl ? maskLocation(f.finalUrl) : "";
+  add("http-status", "pass", "File exists at /llms.txt", f.redirectedFrom ? "HTTP 200, followed a redirect from " + maskLocation(f.redirectedFrom) + (shownFinal ? " to " + shownFinal : "") : "HTTP 200");
   // A leading byte-order mark is stripped the same way the fetch path already strips it: the
   // TextDecoder used there removes a BOM by default, so the direct API took a different
   // document than the fetched one for the exact same bytes until this was measured (outside
@@ -2800,7 +2836,7 @@ export async function validateHost(input: unknown, opts: ValidateHostOptions = {
     // its first 120 characters into stderr and the --json error (Tek-496). Such an entry is
     // named by the host the parser reads from it, or not at all, as the hosted form does.
     const raw = String(input ?? "");
-    const shown = /[@?#]/.test(raw) ? normalizeHostInput(raw) || "" : stripControls(cut(raw, 120));
+    const shown = /[@?#]/.test(raw) ? typedHostEcho(raw) : stripControls(cut(raw, 120));
     throw new Error(shown ? "not a public domain name: " + shown : "not a public domain name");
   }
   // opts comes from the caller, and path and accept exist for this function's own

@@ -55,7 +55,13 @@ if (flags.includes("--version") || flags.includes("-V")) {
   process.exit(0);
 }
 const unknown = flags.find((f) => !KNOWN.has(f));
-if (unknown) fail("unknown option " + JSON.stringify(stripControls(unknown).slice(0, 40)));
+// Only the name of an unknown option is repeated: the dashes and the letters, digits and dashes after them. A target
+// typed with a leading dash, as in -u:password@example.com, is read as an option, and up to 0.8.2 its first 40
+// characters, user information included, were repeated in the error (n9, independent rerun 2026-11-22).
+if (unknown) {
+  const name = /^-+[A-Za-z0-9-]*/.exec(unknown)![0].slice(0, 40);
+  fail("unknown option " + JSON.stringify(name) + (name === unknown ? "" : " (the rest of the argument is not shown)"));
+}
 if (targets.length === 0 || targets[0]!.trim() === "") fail("no domain or URL given");
 if (targets.length > 1) fail("one domain or URL at a time, got " + targets.length);
 
