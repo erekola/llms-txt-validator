@@ -1,5 +1,25 @@
 # turva-llms-txt-validator changelog
 
+## 0.8.1 (2026-11-22)
+This release repairs the masking of addresses in error reports and redirect refusals, and the content-type check, after an outside fuzz run of 0.8.0. It mirrors the same repairs in the hosted validator.
+
+What passes or fails now:
+
+- The content-type check lowercases ASCII letters only and removes only spaces, tabs and line breaks from the ends of the media type. A media type that matched `text/plain` or `text/markdown` only through Unicode lower-casing or Unicode trimming passed and now warns: a leading no-break space, byte-order mark or ideographic space, a trailing vertical tab or form feed, or a Kelvin sign in place of a `k`. A media type of ASCII letters in either case, with or without spaces, tabs or line breaks at its ends, keeps its status, so `text/plain`, ` text/markdown` and `TEXT/Plain; charset=utf-8` still pass.
+
+Text in results:
+
+- A backslash between a Windows domain and a user name no longer stops the masking. In 0.8.0 `CORP\erik:pa#ss@example.com` was shown as `CORP\erik:pa`, with the start of the password, in the `--json` error target and in a redirect refusal. It is now shown as `***@example.com` in the error target and as `***` in a redirect refusal, where the text after the `#` could also be read as a fragment.
+- A scheme-less `user:password@host` given with a base address is masked from its text before the base is applied. In 0.8.0 a fifth redirect to such a value was refused as one hop too many with the password inside the path of the shown address, as in `https://example.com/user_name:secret@example.com`. It is now shown as `***@example.com`. A value such as `user?x:secret@example.com`, where a `?` or `#` comes before the colon, is shown as `user?***` with a base too. In 0.8.0 the text after the `?` reached the shown address, percent-encoded, as a query name. A relative target that holds no user information, such as `/next`, `@scope/pkg` or `p?mail=a@b.com`, is still shown resolved against the request address.
+- C0 control characters and spaces at either end of an address are removed before it is read, as a URL parser removes them. In 0.8.0 a leading space hid a scheme with one slash from the check for ambiguous addresses, so ` https:/user:secret@@example.com` given with a base showed the password. It is now shown as `https://***`. A value such as ` u:secret@example.com/` now reads as a scheme with no authority and is shown as `//***`, as it is without the space.
+- Unicode spaces, U+0085, U+180E, U+200B and U+FFFD at either end of an address are removed for the reading as well, because a reader does not see them. In 0.8.0 a value that started with U+2003 and then `https:/user:secret@example.com` showed the password.
+- A word that a URL parser refuses as a scheme, followed directly by a slash or a backslash, as in `my_app:/user:secret@example.com`, is read as an ambiguous start and shown as `my_app://***`. In 0.8.0 it was shown as given.
+- An address with a scheme and two slashes that a URL parser refuses, with a `?` or `#` before its last `@`, as in `https://user:pa/ss?secret@example.com`, is shown as `https://***`. In 0.8.0 the text before the `?` was shown, part of the password included. A refused address with no `?` or `#` before its last `@` is still shown with everything up to the last `@` as `***`.
+
+Tests:
+
+- test/mask-2026-11-22.test.ts is new. It covers each shape above in the library, the command line and the redirect refusal. test/round3.test.ts expects `//***` for the case with the leading space.
+
 ## 0.8.0 (2026-11-15)
 This release mirrors repairs in the hosted validator. Verdicts move for a backslash before a line ending and for headings inside raw HTML blocks, and the library options `path`, `cap` and `timeoutMs` are stricter. The README describes each rule.
 

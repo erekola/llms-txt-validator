@@ -91,9 +91,10 @@ With `--json`, an invalid domain or a failed fetch returns `{ "error": "...", "t
 In an error report the `target` is the address given on the command line. When it parses as a URL with a host, the user name and password are removed and each query value becomes `***`. Other values follow these cases:
 
 - In a value such as `user:secret@example.com` or `example.org:8443#a@b`, the part before the colon reads as a URL scheme and no authority follows it, so only `//***` is shown.
-- A value with no scheme and no slash is read as user information when a colon comes before its last `@`, so `user_name:secret@example.com` is shown as `***@example.com`.
+- A value with no scheme and no slash is read as user information when a colon comes before its last `@` and before its first `?` or `#`. So `user_name:secret@example.com` and `user_name:se#cret@example.com` are shown as `***@example.com`. A backslash counts as part of the user name, as in a Windows domain account, so `CORP\erik:se#cret@example.com` is shown as `***@example.com` too. The same reading holds when such a value is a relative redirect target that is resolved against the request address, so the password does not come back in the path of the shown address. There a `?` or `#` before the last `@` shows only `***`, because the text after it could also be read as a query or a fragment. When a `?` or `#` comes before the colon, as in `user?x:secret@example.com`, the text from that character on is masked or cut, so the part before it is shown and the password is not.
 - Without that colon, as in `path@2x.png` or an e-mail address, the value is shown as given and holds no password.
-- An address that holds an `@` shows only `***`, with the scheme in front when a slash follows its colon and with no host, when a URL parser and a person would read it differently. That covers a backslash, a `?` or a `#` before the `@` and before any `/`, and a start that is not exactly a scheme, two slashes and a character other than a slash. `https://user:pa?ss@example.com/`, `https://example.org?e=a@b.com` and `https:///host?e=a@b.com` are shown as `https://***`. `user:secret@host.example://dd`, where no slash follows the scheme colon, is shown as `//***`. A redirect to such an address is reported as "a different host that this report does not name". A `/` before the `@` makes it a path, and a relative reference such as `/a@b` or `docs/@name` is masked as before.
+- An address that holds an `@` shows only `***`, with the scheme in front when a slash follows its colon and with no host, when a URL parser and a person would read it differently. That covers a backslash, a `?` or a `#` before the `@` and before any `/`, and a start that is not exactly a scheme, two slashes and a character other than a slash. `https://user:pa?ss@example.com/`, `https://example.org?e=a@b.com` and `https:///host?e=a@b.com` are shown as `https://***`. `user:secret@host.example://dd`, where no slash follows the scheme colon, is shown as `//***`. The same holds for a word that a URL parser refuses as a scheme when a slash or a backslash follows its colon, as in `my_app:/user:secret@host`, and for an address that the parser refuses when a `?` or `#` comes before its last `@`, as in `https://user:pa/ss?secret@example.com`. A redirect to such an address is reported as "a different host that this report does not name". A `/` before the `@` makes it a path, and a relative reference such as `/a@b` or `docs/@name` is masked as before.
+- Spaces, C0 control characters, Unicode spaces and invisible characters such as U+200B at either end of a value are removed before it is read, so a value that starts with U+2003 before `https:/user:secret@example.com` is read as `https:/user:secret@example.com` and shown as `https://***`.
 - Text before `://` that a URL parser does not accept as a scheme, such as `my_app://user:secret@host/p`, `1app://user:secret@host/p` or `ht tps://user:secret@host/p`, is masked from the text: everything up to the last `@` is shown as `***`.
 
 ## What it checks
@@ -103,7 +104,7 @@ In an error report the `target` is the address given on the command line. When i
 | # | Check | Failure | Warning |
 | --- | --- | --- | --- |
 | 1 | `/llms.txt` returns HTTP 200 | Non-200 response, rejected or excessive redirects | none |
-| 2 | Response is plain text | Body looks like an HTML page | The media type, read without its parameters, is neither `text/plain` nor `text/markdown` |
+| 2 | Response is plain text | Body looks like an HTML page | The media type, read without its parameters, with only spaces, tabs and line breaks removed from its ends and only ASCII letters lowercased, is neither `text/plain` nor `text/markdown` |
 | 3 | First non-empty line is a Markdown H1, written `# Title` or as one line of text underlined with `=` | Missing H1, a title indented as a code block, or an H1 with no text | none |
 | 4 | Blockquote summary follows the title | none | Missing summary, a blockquote block in which no line has text after the `>`, or a blockquote after other text but before the first H2, named by its line |
 | 5 | H2 sections group the content | none | No H2 sections, no section with a Markdown link list, a heading between the title and the first H2, or a second H1 |
@@ -252,12 +253,12 @@ The strict type check found two inputs that could leave `undefined` in a check's
 GitHub Actions publishes every version from 0.1.3 on with npm trusted publishing, and each one carries a provenance attestation. To check one, install it in an empty directory and ask npm to verify the signatures. Replace the version with the one you want to check.
 
 ```sh
-mkdir verify-llms && cd verify-llms && npm init -y && npm install turva-llms-txt-validator@0.8.0 --ignore-scripts && npm audit signatures
+mkdir verify-llms && cd verify-llms && npm init -y && npm install turva-llms-txt-validator@0.8.1 --ignore-scripts && npm audit signatures
 ```
 
 `npm audit signatures` checks the registry signature and the provenance attestation of each installed package that has one. The attestation of this package names three things to compare with what you expect: the repository `github.com/erekola/llms-txt-validator`, the workflow file `.github/workflows/publish.yml` and the commit that produced the tarball. The npm version page shows them under Provenance.
 
-Tag `v0.8.0` must point at that same commit, and `gh api repos/erekola/llms-txt-validator/commits/v0.8.0 --jq .sha` prints it. A mismatch is a reason not to use that version. Provenance proves which workflow built a release and from which commit. It does not prove that the code is safe, so reading the source and the dependencies stays your job.
+Tag `v0.8.1` must point at that same commit, and `gh api repos/erekola/llms-txt-validator/commits/v0.8.1 --jq .sha` prints it. A mismatch is a reason not to use that version. Provenance proves which workflow built a release and from which commit. It does not prove that the code is safe, so reading the source and the dependencies stays your job.
 
 ## Development
 

@@ -101,8 +101,16 @@ export function cut(s: string | number, n: number): string {
 // When a parser and a reader would disagree about where the user information ends, only the scheme and "//***" are
 // shown, so no host is named either. The decision is made once, from the written text, at the top of the function.
 export function maskLocation(href: string, base?: string, written?: string): string {
-  // The characters a URL parser drops before it reads anything.
-  const text = String(href).replace(/[\t\n\r]/g, "");
+  // The characters a URL parser drops before it reads anything: tab, CR and LF wherever they stand, and C0 controls
+  // and spaces at either end. Until 2026-11-22 only the first three went, so a leading space or control character hid
+  // a scheme from the ambiguity test below, and " https:/user:pw@@host" against a base printed the password in the
+  // resolved path (V4-3, outside fuzz run 2026-11-22).
+  // The same reading also removes, at either end, the invisible characters that a URL parser keeps: the Unicode
+  // white space, U+0085, U+180E, U+200B and U+FFFD. A reader does not see them, so a value that starts with U+2003
+  // and then https:/user:pw@host is read as the address it shows (L3 of the third independent check).
+  const edge = "[\\x00-\\x20\\s" + String.fromCharCode(0x85, 0x180e, 0x200b, 0xfffd) + "]+";
+  const parserInput = (t: string) => t.replace(/[\t\n\r]/g, "").replace(new RegExp("^" + edge + "|" + edge + "$", "g"), "");
+  const text = parserInput(String(href));
   // Where an authority starts in a text, read from the text and not from the parser: after a scheme and two slashes, the
   // scheme being whatever stands before "://" with no / \ ? or # in it. invalid is true when that "scheme" is not one.
   const shapeOf = (t: string) => {
@@ -127,7 +135,9 @@ export function maskLocation(href: string, base?: string, written?: string): str
     if (!t.includes("@")) return false;
     const m = /^[a-z][a-z0-9+.-]*:/i.exec(t);
     const sep = t.indexOf("://");
-    const lead = m ? m[0] : sep >= 0 && !/[\/\\?#]/.test(t.slice(0, sep)) ? t.slice(0, t.indexOf(":") + 1) : "";
+    // A word the URL parser refuses as a scheme, followed directly by a slash or a backslash, as in my_app:/user:pw@host,
+    // reads as a scheme to a person and as a relative path to the parser (L2 of the third independent check).
+    const lead = m ? m[0] : sep >= 0 && !/[\/\\?#]/.test(t.slice(0, sep)) ? t.slice(0, t.indexOf(":") + 1) : ((/^[^\/\\?#@:]+:(?=[\/\\])/.exec(t)) || [""])[0];
     if (lead.includes("@")) return true;
     if (lead === "" && !/^[\/\\]{2}/.test(t)) return false;
     const p = lead.length;
@@ -138,8 +148,11 @@ export function maskLocation(href: string, base?: string, written?: string): str
     return /[\\?#]/.test(t.slice(p + 2, slash >= 0 && slash < lastAt ? slash : lastAt));
   };
   if (written !== undefined) {
-    const w = String(written).replace(/[\t\n\r]/g, "");
-    if (ambiguous(w) || shapeOf(w).invalid) return maskLocation(written, base);
+    const w = parserInput(String(written));
+    // A written form that lost invisible characters at its ends was resolved by the parser with them, so href is not the
+    // address the reading sees, and the written form is masked instead (differential fuzz against 3.260.6).
+    const parserOwn = String(written).replace(/[\t\n\r]/g, "").replace(/^[\x00-\x20]+|[\x00-\x20]+$/g, "");
+    if (ambiguous(w) || shapeOf(w).invalid || (w !== parserOwn && w.includes("@"))) return maskLocation(written, base);
   }
   if (ambiguous(text)) {
     // The scheme is shown when a slash follows its colon; with no slash the text before the colon may be a user name.
@@ -147,9 +160,86 @@ export function maskLocation(href: string, base?: string, written?: string): str
     return (scheme ? scheme[1] + ":" : "") + "//***";
   }
   const shape = shapeOf(text);
+  // The reading from the text alone. It is the answer when the URL parser finds no host, and for a text with no
+  // scheme-like start and no authority start (two leading slashes or backslashes) it is tried before the parser, below.
+  // masked records whether it hid user information.
+  let masked = false;
+  const fromText = () => {
+    let s = text;
+    const stop = s.search(/[?#]/);
+    // A ? or # before the last @ can still belong to the user information of a text that has no scheme-like start
+    // ("user_name:pa?ss@host"). When a colon and no slash stands before that ?, everything up to the last @ is shown as
+    // ***, and the cut at the ? or # applies to what follows it. A backslash is no slash here: in a text with no scheme a
+    // person reads a backslash between a Windows domain and a user name as part of the user name, and until 2026-11-22
+    // a backslash before the # showed the text up to it, the start of the password included (V4-1, outside fuzz run
+    // 2026-11-22). A scheme or an authority with a ? before the @ is ambiguous and has returned above.
+    if (stop >= 0 && stop >= shape.from) {
+      const lastAt = s.lastIndexOf("@");
+      if (lastAt > stop && shape.from - shape.start < 2 && s.slice(0, stop).includes(":") && !s.slice(shape.start, stop).includes("/")) {
+        const rest = s.slice(lastAt + 1);
+        const rs = rest.search(/[?#]/);
+        masked = true;
+        return s.slice(0, shape.from) + "***@" + (rs >= 0 ? rest.slice(0, rs) + (rest[rs] === "?" ? "?***" : "") : rest);
+      }
+    }
+    if (stop >= 0) s = s.slice(0, stop) + (s[stop] === "?" ? "?***" : "");
+    const after = shapeOf(s);
+    const hasScheme = after.scheme;
+    const start = after.start;
+    const from = after.from;
+    // Without a scheme and two slashes there is normally no authority, and an @ is part of a
+    // path ("path@2x.png" stays unmasked below). But when an @ still appears before the first
+    // /, the text ahead of it reads as userinfo even when the parser here does not recognise it
+    // as a scheme (an underscore, a leading digit or space, a stray control character), so that
+    // shape is masked too instead of let through (VN1, round 3 Tek-542). With no slash at all
+    // the same holds when a ":" comes before the last @: "user_name:secret@example.com" is
+    // user:password and is masked, while "path@2x.png" has no ":" ahead of its @ and stays as
+    // given (outside review V13, D5-1: the slashless shape used to return early and print the
+    // password).
+    if (!hasScheme && from - start < 2) {
+      const firstSlash = s.indexOf("/");
+      const firstAt = s.indexOf("@");
+      if (firstAt < 0) return s;
+      if (firstSlash < 0) {
+        if (!s.slice(0, s.lastIndexOf("@")).includes(":")) return s;
+      } else if (firstAt > firstSlash) {
+        return s;
+      }
+    }
+    // Nothing tells which @ of a refused target ends the user information, so everything up to the
+    // last one is shown as ***. The mask is visible on purpose: three review rounds on 2026-09-22
+    // measured every rule that guessed, and each one either returned a password that holds a slash
+    // or made the host vanish without a trace.
+    const at = s.lastIndexOf("@");
+    if (at < from) return s;
+    masked = true;
+    return s.slice(0, from) + "***@" + s.slice(at + 1);
+  };
+  // A text with no scheme-like start and no authority start is a relative reference to a URL parser, and against a base
+  // it resolves into a path: "user_name:pw@host" became "https://<base host>/user_name:pw@host", and a redirect refused
+  // as one hop too many passes the request URL as that base (outside fuzz run 2026-11-22, the base form of V4-1). A
+  // person reads such a text as user information and a host, so when the reading from the text hides user
+  // information that answer stands with or without a base. A ? or # before the last @ with a colon between them hides
+  // user information that the parser reads as a query name or a fragment ("user?x:pw@host" against a base showed
+  // "x:pw@host" as the query name), so the cut form from the text is shown then too. A relative reference with no colon
+  // before its last @, such as "path@2x.png", "@scope/pkg" or "p?mail=a@b.com", is still resolved against the base
+  // below, as before.
+  const lastAtText = text.lastIndexOf("@");
+  if (!shape.scheme && shape.from - shape.start < 2 && lastAtText > 0 && text.slice(0, lastAtText).includes(":")) {
+    const shown = fromText();
+    const cut = text.search(/[?#]/);
+    const cutBeforeAt = cut >= 0 && cut < lastAtText;
+    // With a base the URL reading puts the text after a ? or # into a query or a fragment and masks it, while the text
+    // reading shows the text after the last @ as a host, so only *** is shown and neither reading shows the other's part
+    // (differential fuzz against 3.260.6).
+    if (masked) return base !== undefined && cutBeforeAt ? "***" : shown;
+    if (cutBeforeAt && text.slice(cut, lastAtText).includes(":")) return shown;
+  }
   let u: URL | null = null;
   if (!shape.invalid) {
-    try { u = new URL(href, base); } catch { u = null; }
+    // The parser reads the same text as the reading above. Given href, it kept a leading U+00A0 or U+2003 and resolved
+    // "<U+00A0>https://user:pw@host/p" against a base as a relative path with the password in it (fifth check).
+    try { u = new URL(text, base); } catch { u = null; }
   }
   // An opaque URL (no authority, e.g. "u:name@host/") parses without throwing but has no
   // host, so clearing u.username/u.password is a silent no-op: WHATWG has nowhere to put
@@ -171,50 +261,16 @@ export function maskLocation(href: string, base?: string, written?: string): str
     u.hash = "";
     return u.href;
   }
-  let s = text;
-  const stop = s.search(/[?#]/);
-  // A ? or # before the last @ can still belong to the user information of a text that has no scheme-like start
-  // ("user_name:pa?ss@host"). When a colon and no slash stands before that ?, everything up to the last @ is shown as ***,
-  // and the cut at the ? or # applies to what follows it. A scheme or an authority with a ? before the @ is ambiguous and
-  // has returned above.
-  if (stop >= 0 && stop >= shape.from) {
-    const lastAt = s.lastIndexOf("@");
-    if (lastAt > stop && shape.from === shape.start && s.slice(0, stop).includes(":") && !/[\/\\]/.test(s.slice(shape.from, stop))) {
-      const rest = s.slice(lastAt + 1);
-      const rs = rest.search(/[?#]/);
-      return s.slice(0, shape.from) + "***@" + (rs >= 0 ? rest.slice(0, rs) + (rest[rs] === "?" ? "?***" : "") : rest);
-    }
+  // A scheme and an authority start that the URL parser refuses, as with the port "pa" in https://user:pa/ss?pw@host,
+  // and a ? or # before the last @: no parse tells where the user information ends, and the cut at the ? showed part
+  // of the password, so only the scheme is shown (fourth independent check). A refused target with no ? or # before
+  // its last @ keeps the reading below, everything up to the last @ shown as ***.
+  const qAt = text.slice(shape.from).search(/[?#]/);
+  if (!shape.invalid && shape.from - shape.start >= 2 && qAt >= 0 && text.lastIndexOf("@") > shape.from + qAt) {
+    const sc = /^[a-z][a-z0-9+.-]*:/i.exec(text);
+    if (sc) return sc[0] + "//***";
   }
-  if (stop >= 0) s = s.slice(0, stop) + (s[stop] === "?" ? "?***" : "");
-  const after = shapeOf(s);
-  const hasScheme = after.scheme;
-  const start = after.start;
-  const from = after.from;
-  // Without a scheme and two slashes there is normally no authority, and an @ is part of a
-  // path ("path@2x.png" stays unmasked below). But when an @ still appears before the first
-  // /, the text ahead of it reads as userinfo even when the parser here does not recognise it
-  // as a scheme (an underscore, a leading digit or space, a stray control character), so that
-  // shape is masked too instead of let through (VN1, round 3 Tek-542). With no slash at all
-  // the same holds when a ":" comes before the last @: "user_name:secret@example.com" is
-  // user:password and is masked, while "path@2x.png" has no ":" ahead of its @ and stays as
-  // given (outside review V13, D5-1: the slashless shape used to return early and print the
-  // password).
-  if (!hasScheme && from - start < 2) {
-    const firstSlash = s.indexOf("/");
-    const firstAt = s.indexOf("@");
-    if (firstAt < 0) return s;
-    if (firstSlash < 0) {
-      if (!s.slice(0, s.lastIndexOf("@")).includes(":")) return s;
-    } else if (firstAt > firstSlash) {
-      return s;
-    }
-  }
-  // Nothing tells which @ of a refused target ends the user information, so everything up to the
-  // last one is shown as ***. The mask is visible on purpose: three review rounds on 2026-09-22
-  // measured every rule that guessed, and each one either returned a password that holds a slash
-  // or made the host vanish without a trace.
-  const at = s.lastIndexOf("@");
-  return at < from ? s : s.slice(0, from) + "***@" + s.slice(at + 1);
+  return fromText();
 }
 
 // Unicode bidi controls (U+202A to U+202E, U+2066 to U+2069) have no place in a check's
@@ -1421,7 +1477,10 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
   // CR-only and CRLF line endings become LF here (Tek-560): a file written with bare CR was one
   // line for the old split and read as a title with the whole document in it.
   const text = (f.text.charCodeAt(0) === 0xFEFF ? f.text.slice(1) : f.text).replace(/\r\n?/g, "\n");
-  const ct = (f.contentType || "").toLowerCase();
+  // ASCII lower case and HTTP white space only (CT-1, outside fuzz run 2026-11-22). toLowerCase() turned the Kelvin sign
+  // U+212A in "text/mar<U+212A>down" into a k, and trim() removed a leading no-break space, which HTTP carries as an
+  // obs-text byte, so a media type that a MIME type parser refuses passed as text/plain or text/markdown.
+  const ct = (f.contentType || "").replace(/[A-Z]+/g, (c) => c.toLowerCase());
   const looksHtml = /^\s*(<!doctype|<html|<head|<body)/i.test(text);
   if (looksHtml) {
     add("content-type", "fail", "Response is plain text", "the body looks like an HTML page, not an llms.txt file");
@@ -1429,7 +1488,7 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
   }
   // The media type is compared whole, without its parameters. A substring test passed
   // application/x-text/plain and text/markdownish until 2026-09-27 (Tek-496).
-  const mediaType = ct.split(";")[0]!.trim();
+  const mediaType = ct.split(";")[0]!.replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, "");
   if (mediaType === "text/plain" || mediaType === "text/markdown") {
     add("content-type", "pass", "Response is plain text", mediaType);
   } else {

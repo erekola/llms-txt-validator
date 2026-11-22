@@ -33,11 +33,14 @@ test("VN1: maskLocation masks an unrecognised-scheme userinfo when an @ precedes
     maskLocation("1user:AUDIT_SECRET_64923@example.com/?token=TOPSECRET#FRAGMENTSECRET"),
     "***@example.com/?***"
   );
-  // A leading ASCII space (R1's own fixture prefixed by one space).
+  // A leading ASCII space (R1's own fixture prefixed by one space). From 0.8.1 the space goes before the text is read,
+  // as the URL parser removes it, so "u:" reads as a scheme with no authority after it and only "//***" is shown, the
+  // same answer as for the text without the space (V4-3, outside fuzz run 2026-11-22).
   assert.equal(
     maskLocation(" u:AUDIT_SECRET_64923@example.com/?token=TOPSECRET#FRAGMENTSECRET"),
-    "***@example.com/?***"
+    "//***"
   );
+  assert.equal(maskLocation("u:AUDIT_SECRET_64923@example.com/?token=TOPSECRET#FRAGMENTSECRET"), "//***");
   // A literal ESC inside the would-be scheme.
   assert.equal(maskLocation("u\x1b:AUDIT_SECRET@example.com/"), "***@example.com/");
 });
