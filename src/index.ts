@@ -84,6 +84,34 @@ export function cut(s: string | number, n: number): string {
   return /[\uD800-\uDBFF]$/.test(s) ? s.slice(0, -1) : s;
 }
 
+// Removes a run of the characters strip accepts from each end of s, with two index loops. The regex form
+// s.replace(/^[set]+|[set]+$/g, "") tries the trailing alternative again from every position inside a long run of
+// those characters that does not reach the end, so its time grows with the square of the run (CodeQL
+// js/polynomial-redos, 2026-11-22). The result is the same string.
+function trimEnds(s: string, strip: (c: number) => boolean): string {
+  let a = 0;
+  let b = s.length;
+  while (a < b && strip(s.charCodeAt(a))) a++;
+  while (b > a && strip(s.charCodeAt(b - 1))) b--;
+  return s.slice(a, b);
+}
+
+// The characters maskLocation() removes at either end of an address: C0 controls and spaces, which a URL parser
+// drops, and the Unicode white space, U+0085, U+180E, U+200B and U+FFFD, which a reader does not see.
+function isUrlEdge(c: number): boolean {
+  return c <= 0x20 || c === 0x85 || c === 0x180e || c === 0x200b || c === 0xfffd || /\s/.test(String.fromCharCode(c));
+}
+
+// C0 controls and spaces, the characters a URL parser removes at either end of an address.
+function isC0OrSpace(c: number): boolean {
+  return c <= 0x20;
+}
+
+// HTTP white space: tab, LF, CR and space.
+function isHttpSpace(c: number): boolean {
+  return c === 0x09 || c === 0x0a || c === 0x0d || c === 0x20;
+}
+
 // A redirect target the way a report may show it. The scheme, the host and the path stay readable,
 // and the parts that can carry a secret do not: the user name and the password are removed, every
 // query value becomes ***, and the fragment is dropped. The caller cuts the result to length
@@ -108,8 +136,7 @@ export function maskLocation(href: string, base?: string, written?: string): str
   // The same reading also removes, at either end, the invisible characters that a URL parser keeps: the Unicode
   // white space, U+0085, U+180E, U+200B and U+FFFD. A reader does not see them, so a value that starts with U+2003
   // and then https:/user:pw@host is read as the address it shows (L3 of the third independent check).
-  const edge = "[\\x00-\\x20\\s" + String.fromCharCode(0x85, 0x180e, 0x200b, 0xfffd) + "]+";
-  const parserInput = (t: string) => t.replace(/[\t\n\r]/g, "").replace(new RegExp("^" + edge + "|" + edge + "$", "g"), "");
+  const parserInput = (t: string) => trimEnds(t.replace(/[\t\n\r]/g, ""), isUrlEdge);
   const text = parserInput(String(href));
   // Where an authority starts in a text, read from the text and not from the parser: after a scheme and two slashes, the
   // scheme being whatever stands before "://" with no / \ ? or # in it. invalid is true when that "scheme" is not one.
@@ -151,7 +178,7 @@ export function maskLocation(href: string, base?: string, written?: string): str
     const w = parserInput(String(written));
     // A written form that lost invisible characters at its ends was resolved by the parser with them, so href is not the
     // address the reading sees, and the written form is masked instead (differential fuzz against 3.260.6).
-    const parserOwn = String(written).replace(/[\t\n\r]/g, "").replace(/^[\x00-\x20]+|[\x00-\x20]+$/g, "");
+    const parserOwn = trimEnds(String(written).replace(/[\t\n\r]/g, ""), isC0OrSpace);
     if (ambiguous(w) || shapeOf(w).invalid || (w !== parserOwn && w.includes("@"))) return maskLocation(written, base);
   }
   if (ambiguous(text)) {
@@ -1488,7 +1515,7 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
   }
   // The media type is compared whole, without its parameters. A substring test passed
   // application/x-text/plain and text/markdownish until 2026-09-27 (Tek-496).
-  const mediaType = ct.split(";")[0]!.replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, "");
+  const mediaType = trimEnds(ct.split(";")[0]!, isHttpSpace);
   if (mediaType === "text/plain" || mediaType === "text/markdown") {
     add("content-type", "pass", "Response is plain text", mediaType);
   } else {

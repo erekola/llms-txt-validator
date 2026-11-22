@@ -1,5 +1,20 @@
 # turva-llms-txt-validator changelog
 
+## 0.8.2 (2026-11-22)
+Nothing changes in what the validator reports. This release replaces three trims whose time grew with the square of a run of spaces inside the value. CodeQL code scanning flagged two of them on 0.8.1, and the third, built from a string at run time, had the same form. The hosted validator gets the same change.
+
+What passes or fails now:
+
+- Nothing changes. Every result is the one 0.8.1 gave.
+
+Speed:
+
+- The ends of a value are trimmed with two index loops instead of a regular expression of the form `/^[set]+|[set]+$/g`. This covers the reading of an address in an error report or a redirect refusal, the check of the written form of that address, and the media type of the content-type check. In a run of characters from the set that did not reach the end, the regular expression tried its second alternative again at every position. A value with 50 000 spaces inside took 0.55 to 0.75 seconds in each place, and twice as many spaces took about four times as long. The loops take time in proportion to the length. A differential run over every UTF-16 code unit and 300 000 random strings gave the same output as 0.8.1.
+
+Tests:
+
+- A new test calls all three places on values with 200 000 spaces or ideographic spaces inside, and fails when the calls together take three seconds or more.
+
 ## 0.8.1 (2026-11-22)
 This release repairs the masking of addresses in error reports and redirect refusals, and the content-type check, after an outside fuzz run of 0.8.0. It mirrors the same repairs in the hosted validator.
 
