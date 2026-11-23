@@ -51,11 +51,13 @@ export type FetchRedirect = {
   status: number;
   location: string;
 };
+// null means the default for timeoutMs, cap and path, as undefined does (the README says so, and the code has always
+// read it so); until 0.8.4 the declaration refused null, so a TypeScript caller could not pass what the text promised.
 export type ValidateHostOptions = {
-  timeoutMs?: number;
-  cap?: number;
+  timeoutMs?: number | null;
+  cap?: number | null;
   userAgent?: string;
-  path?: string;
+  path?: string | null;
   accept?: string;
 };
 export type FetchOptions = ValidateHostOptions;
@@ -94,15 +96,72 @@ export function cut(s: string | number, n: number): string {
 function trimEnds(s: string, strip: (c: number) => boolean): string {
   let a = 0;
   let b = s.length;
-  while (a < b && strip(s.charCodeAt(a))) a++;
-  while (b > a && strip(s.charCodeAt(b - 1))) b--;
+  // The characters are read as code points, so a character outside the Basic Multilingual Plane (the tag characters
+  // U+E0000 to U+E007F, for one) is one character at an end and not two lone surrogates.
+  while (a < b) {
+    const c = s.codePointAt(a)!;
+    if (!strip(c)) break;
+    a += c > 0xffff ? 2 : 1;
+  }
+  while (b > a) {
+    const lo = s.charCodeAt(b - 1);
+    const pair = lo >= 0xdc00 && lo <= 0xdfff && b - 2 >= a && s.charCodeAt(b - 2) >= 0xd800 && s.charCodeAt(b - 2) <= 0xdbff;
+    const c = pair ? s.codePointAt(b - 2)! : lo;
+    if (!strip(c)) break;
+    b -= pair ? 2 : 1;
+  }
   return s.slice(a, b);
 }
 
 // The characters maskLocation() removes at either end of an address: C0 controls and spaces, which a URL parser
-// drops, and the Unicode white space, U+0085, U+180E, U+200B and U+FFFD, which a reader does not see.
+// drops, and every character a reader does not see: the white space, the separators, the control and format characters
+// and the default-ignorable code points of Unicode (soft hyphen, the direction marks, the word joiner, the Hangul
+// fillers, the variation selectors and the tag characters among them), plus U+0085, U+180E, U+200B, U+2800 and U+FFFD.
+// A list of three such characters left the rest in front of "//user:password@host", which then read as a relative path
+// and showed the password (K2-F1 of the outside reading, 2026-11-22). Every other character at an end stays.
+const URL_EDGE_CLASS = /^[\s\p{Cc}\p{Cf}\p{Z}\p{Default_Ignorable_Code_Point}]$/u;
 function isUrlEdge(c: number): boolean {
-  return c <= 0x20 || c === 0x85 || c === 0x180e || c === 0x200b || c === 0xfffd || /\s/.test(String.fromCharCode(c));
+  if (c <= 0x20 || c === 0x85 || c === 0x180e || c === 0x200b || c === 0x2800 || c === 0xfffd) return true;
+  if (c >= 0xd800 && c <= 0xdfff) return false;
+  return URL_EDGE_CLASS.test(String.fromCodePoint(c));
+}
+// A header value reaches this code as one code unit per byte (fetch hands out a ByteString), so a Location whose bytes are
+// UTF-8 text shows each character as two or three Latin-1 characters, and an invisible character at its start (U+3000 as
+// the bytes E3 80 80) is then not the character the edge trim removes (V1 of the C1c outside run, 2026-11-22). The value
+// is read as UTF-8 text when every code unit is a byte, one valid sequence at a time. Only
+// the masking reads this text: the address that is followed is resolved from the value as it arrived.
+function headerText(raw: string): string {
+  let high = false;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw.charCodeAt(i);
+    if (c > 0xff) return raw;
+    if (c > 0x7f) high = true;
+  }
+  if (!high) return raw;
+  // Valid UTF-8 sequences are decoded one by one, so a multi-byte invisible lead is read as the character it spells even when
+  // another byte of the value is invalid (QA-1, 2026-11-23). A byte that is not valid UTF-8 stays as it arrived between the
+  // first and the last printable ASCII character, and is U+FFFD, an edge character, before the first and after the last one,
+  // so such a byte cannot shield the edge characters next to it from the trim.
+  const bytes = Uint8Array.from(raw, (ch) => ch.charCodeAt(0));
+  let firstAscii = -1;
+  let lastAscii = -1;
+  for (let i = 0; i < bytes.length; i++) {
+    if (bytes[i]! > 0x20 && bytes[i]! < 0x7f) { if (firstAscii < 0) firstAscii = i; lastAscii = i; }
+  }
+  const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+  let out = "";
+  let i = 0;
+  while (i < bytes.length) {
+    const b = bytes[i]!;
+    if (b < 0x80) { out += raw[i]; i++; continue; }
+    const len = b >= 0xc2 && b <= 0xdf ? 2 : b >= 0xe0 && b <= 0xef ? 3 : b >= 0xf0 && b <= 0xf4 ? 4 : 0;
+    if (len > 0 && i + len <= bytes.length) {
+      try { out += decoder.decode(bytes.subarray(i, i + len)); i += len; continue; } catch { /* not valid UTF-8 */ }
+    }
+    out += firstAscii < 0 || i < firstAscii || i > lastAscii ? "\ufffd" : raw[i];
+    i++;
+  }
+  return out;
 }
 
 // C0 controls and spaces, the characters a URL parser removes at either end of an address.
@@ -478,10 +537,11 @@ export async function fetchLlmsTxt(host: string, opts: FetchOptions = {}): Promi
       // failed cancel must not turn a redirect verdict into a throw (2026-09-10).
       try { await res.body?.cancel(); } catch { /* the verdict below is the answer */ }
       const loc = res.headers.get("location") || "";
+      const shown = headerText(loc);
       if (!loc) return { redirect: true, reason: "no-location", status: res.status, location: "" };
-      if (hop >= 4) return { redirect: true, reason: "too-many", status: res.status, location: cut(maskLocation(loc, hidden ? undefined : url), 120) };
+      if (hop >= 4) return { redirect: true, reason: "too-many", status: res.status, location: cut(maskLocation(shown, hidden ? undefined : url), 120) };
       let next: URL;
-      try { next = new URL(loc, url); } catch { return { redirect: true, reason: "bad-location", status: res.status, location: cut(maskLocation(loc, hidden ? undefined : url), 120) }; }
+      try { next = new URL(loc, url); } catch { return { redirect: true, reason: "bad-location", status: res.status, location: cut(maskLocation(shown, hidden ? undefined : url), 120) }; }
       const parsedHref = next.href;
       // LV-22 (round S3, Tek-546): one trailing dot names the same host, as it does in the typed
       // address (normalizeHostInput), so a redirect to https://example.com./ is a same-site redirect.
@@ -489,8 +549,8 @@ export async function fetchLlmsTxt(host: string, opts: FetchOptions = {}): Promi
       if (next.hostname.length > 1 && next.hostname.endsWith(".")) next.hostname = next.hostname.slice(0, -1);
       const safeTarget = next.protocol === "https:" && !next.port && !next.username && !next.password && isValidPublicHost(next.hostname);
       const twin = (next.hostname.startsWith("www.") ? next.hostname.slice(4) : next.hostname) === reqApex;
-      if (!safeTarget) return { redirect: true, reason: "unsafe-target", status: res.status, location: cut(maskLocation(next.href, undefined, loc), 120) };
-      if (!twin) return { redirect: true, reason: "off-host", status: res.status, location: cut(maskLocation(next.href, undefined, loc), 120) };
+      if (!safeTarget) return { redirect: true, reason: "unsafe-target", status: res.status, location: cut(maskLocation(next.href, undefined, shown), 120) };
+      if (!twin) return { redirect: true, reason: "off-host", status: res.status, location: cut(maskLocation(next.href, undefined, shown), 120) };
       // A followed Location that reads as user information, as user_name:password@example.com resolved into
       // https://example.com/user_name:password@example.com, kept the password in the address the report showed (n1,
       // independent rerun 2026-11-22). The Location is read as written, against the address it came from, as a refused
@@ -503,7 +563,7 @@ export async function fetchLlmsTxt(host: string, opts: FetchOptions = {}): Promi
       // marked address did not reach it. Bases one segment deep let ".." and "../x" clear the mark while the hidden
       // segments stayed (F1 of the seventh check, 2026-11-22).
       const inheritsBase = (() => { const u0 = new URL(url); let n = 0; const alt = u0.origin + u0.pathname.replace(/[^\/]+/g, () => "zz9q" + n++) + (u0.search ? "?zz9q" : ""); try { return new URL(loc, url).href !== new URL(loc, alt).href; } catch { return true; } })();
-      hidden = maskLocation(loc, url) !== maskLocation(parsedHref) || maskLocation(next.href, undefined, loc) !== maskLocation(next.href) || (hidden && inheritsBase);
+      hidden = maskLocation(shown, url) !== maskLocation(parsedHref) || maskLocation(next.href, undefined, shown) !== maskLocation(next.href) || (hidden && inheritsBase);
       if (!redirectedFrom) redirectedFrom = url;
       url = next.href;
       continue;
@@ -1572,9 +1632,13 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
   const h1End = setext ? firstIdx + 1 : firstIdx;
   // A title that renders no text, "# &#32;" or a code span of spaces, is an empty H1 as well (S3, LV-15).
   const titleBlank = title !== null && !hasVisibleText(title);
-  if ((title && !titleBlank) || setext) {
+  // A setext title whose text renders nothing is an empty H1 as well (P14, the K2 reading of 2026-11-22): "&#32;" or a
+  // code span of one space over a line of "=" passed until 0.8.3 while the same text after "# " failed. A line of nothing
+  // but spaces is no first line at all, so it never gets here.
+  const setextBlank = setext && !hasVisibleText(firstRaw.trim());
+  if ((title && !titleBlank) || (setext && !setextBlank)) {
     add("h1-title", "pass", "Starts with an H1 title", JSON.stringify(cut(first, 80)));
-  } else if (titleBlank) {
+  } else if (titleBlank || setextBlank) {
     add("h1-title", "fail", "Starts with an H1 title", "the H1 has no text. The format requires the project name there");
   } else {
     add("h1-title", "fail", "Starts with an H1 title", "the first non-empty line should be a markdown H1 (# Site name, or one line of text underlined with =)");
@@ -2803,7 +2867,9 @@ export function findLinkRelations(html: string, linkHeader: string, readCut: boo
 
 // A caller that passes null without a reason gets a neutral one instead of an undefined detail (Tek-668,
 // NULL-1, mirrored from worker.ts); validateHost always passes its own.
-export function validateV2Discovery(found: LinkRelations | null, unreadReason: string = "the home page was not read, so this was not measured"): LlmsCheck[] {
+// readCap is the read limit in bytes the home page was read with, so the text about a cut page names the limit that was
+// used: "256 KiB" for the default and the number of bytes for a limit a library caller set (n5, K2 reading 2026-11-22).
+export function validateV2Discovery(found: LinkRelations | null, unreadReason: string = "the home page was not read, so this was not measured", readCap: number = 262144): LlmsCheck[] {
   const checks: LlmsCheck[] = [];
   const add = (id: string, status: CheckStatus, label: string, detail: string) => checks.push({ id, status, label, detail });
   if (!found) {
@@ -2814,7 +2880,8 @@ export function validateV2Discovery(found: LinkRelations | null, unreadReason: s
   // A target is shown through maskLocation, as a redirect target is, so a user name, a password,
   // a query value or a fragment in a published link stays out of the report; until 2026-09-27 it
   // was only cut (Tek-496). A relative target stays relative.
-  const where = found.headCut ? "in the first 65,536 characters of the head, the part that was read, or in the Link header" : found.readCut ? "in the first 256 KiB of the home page, the part that was read, or in the Link header" : "in the head or the Link header";
+  const readLimit = readCap === 262144 ? "256 KiB" : readCap + " bytes";
+  const where = found.headCut ? "in the first 65,536 characters of the head, the part that was read, or in the Link header" : found.readCut ? "in the first " + readLimit + " of the home page, the part that was read, or in the Link header" : "in the head or the Link header";
   add("v2-describedby", found.describedby ? "pass" : "info", "Home page points to its llms.txt (v2)",
     found.describedby ? 'rel="describedby" to ' + cut(maskLocation(found.describedby), 120) : 'no rel="describedby" ' + where + '; v2 recommends it so an agent finds the file without guessing');
   add("v2-markdown-alternate", found.markdown ? "pass" : "info", "Home page points to a markdown version (v2)",
@@ -2850,7 +2917,7 @@ export async function validateHost(input: unknown, opts: ValidateHostOptions = {
       ? validateV2Discovery(null, "the home page redirects away from this host, so this was not measured")
       : home.status !== 200
         ? validateV2Discovery(null, "the home page returned HTTP " + home.status + ", so this was not measured")
-        : validateV2Discovery(findLinkRelations(home.text, home.linkHeader, home.truncated, [home.finalUrl, "https://" + host + "/"]));
+        : validateV2Discovery(findLinkRelations(home.text, home.linkHeader, home.truncated, [home.finalUrl, "https://" + host + "/"]), undefined, requestLimits(opts).cap);
   } catch {
     discovery = validateV2Discovery(null, "the home page could not be read, so this was not measured");
   }

@@ -1,5 +1,32 @@
 # turva-llms-txt-validator changelog
 
+## 0.8.4 (2026-11-23)
+This release repairs two places where a result or an error still showed user information, after a further independent rerun against 0.8.3, and makes one structure check stricter. It mirrors the masking and setext repairs in the hosted validator. The read limit in the home page note and the `null` option types exist only in the package.
+
+What passes or fails now:
+
+- A title written as one line of text underlined with `=` fails when the text renders nothing, as the same text after `#` already did. `&#32;` above `=====` passed in 0.8.3. It now fails with "the H1 has no text". `# Example`, `Example` above `=====` and a line of spaces above `=====` keep their answers. No other check changes.
+
+Text in results:
+
+- A `Location` with a byte that is not valid UTF-8 before its first or after its last printable ASCII character, such as the Latin-1 byte 0xE9 at the end of `https://example.com/caf`, is shown as `https://example.com/***` when it is followed. 0.8.3 showed `https://example.com/caf%C3%A9`. A byte in the middle of the path shows as before. Redirects refused as one hop too many leave such a byte out of the address they show. Nothing changes in the request, the status or `finalUrl`.
+- A redirect `Location` that starts with a Unicode space or an invisible character no longer shows the password. The header reaches the validator as bytes that the platform reads as Latin-1, so a U+3000, U+00A0 or U+200B at the start arrived as several other characters and was not removed. The validator now reads those bytes as UTF-8 when they form valid UTF-8, and removes the same edge characters in both forms. A byte that is not valid UTF-8 stays as it arrived between the first and the last printable ASCII character, and counts as an edge character outside them. The edge set is now defined by Unicode class: spaces, control characters, format characters and default-ignorable characters.
+- The `target` in a `--json` error report no longer shows the password for `//user:secret@host` with a U+200E or a U+00AD in front. The command line uses the same edge set as the library.
+- The note about a home page that was cut names the read limit the caller set, as a byte count, instead of always saying 256 KiB. The default is still named as 256 KiB.
+
+Types:
+
+- `timeoutMs`, `cap` and `path` in `ValidateHostOptions` accept `null`, which the README already described as meaning the default.
+
+Tests:
+
+- test/mask-2026-11-23.test.ts is new. It runs a seeded generator of user-information forms with invisible and Unicode-space characters at either end, as real characters and as UTF-8 read as Latin-1, through the shown address, the typed argument, the redirect and the command line, and it requires that the password never appears in any output.
+- test/k2-2026-11-23.test.ts is new. It covers the setext title, the read limit in the note and the `null` options.
+
+Documentation:
+
+- The README states which forms of a multi-line link reference are read, how labels match, that a fragment in `path` is not sent, the default `user-agent` and `accept` values, where a result names a redirect target, that `--help` and `--version` win over argument errors, and that the `charset` parameter is not used.
+
 ## 0.8.3 (2026-11-22)
 This release repairs four places where a result or an error showed user information, after an independent rerun against 0.8.1. It mirrors the same repairs in the hosted validator.
 
