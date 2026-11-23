@@ -37,7 +37,7 @@ llms-txt-validate --help
 llms-txt-validate --version
 ```
 
-A domain, an HTTP URL or an HTTPS URL is accepted. Validation always uses the host's `/llms.txt` and home page over HTTPS, regardless of the supplied path. If the address has a path other than `/` or `/llms.txt`, the result names that path first in an `info` line.
+A domain, an HTTP URL or an HTTPS URL is accepted. A host given with port 80 or 443 is read at HTTPS on port 443, and any other port is refused. Validation always uses the host's `/llms.txt` and home page over HTTPS, regardless of the supplied path. If the address has a path other than `/` or `/llms.txt`, the result names that path first in an `info` line.
 
 | Option | Effect |
 | --- | --- |

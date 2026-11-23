@@ -103,7 +103,10 @@ jobs:
         run: |
           set -euo pipefail
           awk -v v="${GITHUB_REF_NAME#v}" 'index($0, "## " v " ") == 1 { f = 1; next } /^## / { f = 0 } f' CHANGELOG.md > release-pack/notes.md
-          if [ ! -s release-pack/notes.md ]; then echo "See CHANGELOG.md." > release-pack/notes.md; fi
+          if ! grep -q '[^[:space:]]' release-pack/notes.md; then
+            echo "CHANGELOG.md has no section headed ## ${GITHUB_REF_NAME#v}, so there are no release notes" >&2
+            exit 1
+          fi
       - name: Hand the tarball and the release notes to the next jobs
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
