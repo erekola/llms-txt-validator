@@ -1,5 +1,20 @@
 # turva-llms-txt-validator changelog
 
+## 0.8.5 (2026-11-28)
+This release changes one detail of the links check for a file that was cut at the read limit. It mirrors the same repair in the hosted validator.
+
+What passes or fails now:
+
+- When the read was truncated, the last line read is no longer counted as a list line that looks like a link entry but is not a Markdown link, and no longer as a line that opens with a dash or bullet that is not a list marker. The read limit can cut that line in the middle of its link, so calling it malformed was unsupported. On such a file the links check can now pass where 0.8.4 warned about that one line. The summary of a truncated file does not change, because the size check already warns on it. A file that was not truncated keeps every answer it had.
+
+Tests:
+
+- test/truncation-2026-11-28.test.ts is new. It covers the truncated file, the same text without truncation, a malformed line and a line that opens with a dash before the last one in a truncated file, and a line of prose before the H1, which fails the H1 check as before.
+
+Documentation and package metadata:
+
+- The repository moved to the turva-dev organization on 2026-11-25. The README, SECURITY.md and the repository and issue addresses in package.json now point at github.com/turva-dev/llms-txt-validator. The README and SECURITY.md name the repository each release was built in: versions up to and including 0.8.4 in github.com/erekola/llms-txt-validator, and this release and every later one in github.com/turva-dev/llms-txt-validator.
+
 ## 0.8.4 (2026-11-23)
 This release repairs two places where a result or an error still showed user information, after a further independent rerun against 0.8.3, and makes one structure check stricter. It mirrors the masking and setext repairs in the hosted validator. The read limit in the home page note and the `null` option types exist only in the package.
 

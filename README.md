@@ -108,7 +108,7 @@ In an error report the `target` is the address given on the command line. When i
 | 3 | First non-empty line is a Markdown H1, written `# Title` or as one line of text underlined with `=` | Missing H1, a title indented as a code block, or an H1 with no text, whether written with `#` or underlined with `=` | none |
 | 4 | Blockquote summary follows the title | none | Missing summary, a blockquote block in which no line has text after the `>`, or a blockquote after other text but before the first H2, named by its line |
 | 5 | H2 sections group the content | none | No H2 sections, no section with a Markdown link list, a heading between the title and the first H2, or a second H1 |
-| 6 | Markdown links have names and absolute HTTP or HTTPS targets | none | Missing links, empty names, relative targets or targets that do not parse as HTTP or HTTPS URLs, or a list line under an H2 of one of two kinds. The first kind looks like a link entry but is not a Markdown link, such as an unclosed destination in `- [Name](https://example.com/a.md: notes)`. The second kind opens with an en dash, an em dash or a bullet instead of a list marker, followed by a space or a tab and an opening bracket, whether or not its link parses. A line with such a character and no opening bracket is not counted, and a no-break space does not count as the space. The detail has one sentence per kind, each with its count and the first five line numbers |
+| 6 | Markdown links have names and absolute HTTP or HTTPS targets | none | Missing links, empty names, relative targets or targets that do not parse as HTTP or HTTPS URLs, or a list line under an H2 of one of two kinds. The first kind looks like a link entry but is not a Markdown link, such as an unclosed destination in `- [Name](https://example.com/a.md: notes)`. The second kind opens with an en dash, an em dash or a bullet instead of a list marker, followed by a space or a tab and an opening bracket, whether or not its link parses. A line with such a character and no opening bracket is not counted, and a no-break space does not count as the space. When the read was truncated, the last line read is not counted, because the read limit may have cut it. The detail has one sentence per kind, each with its count and the first five line numbers |
 | 7 | File is small enough to read cheaply | none | Over 50 KiB, which is 51,200 bytes, or truncated at the 256 KiB read limit |
 | 8 | File contains no HTML markup | none | An opening tag with its closing `>`, a closing tag or an HTML comment is found in the prose. Inline code spans, fenced code and backslash-escaped angle brackets such as `\<node-name\>` are not read, so `<endpoint-id>` in a code span does not warn. An attribute name is any run of characters other than white space, quotes, `<`, `>`, `/` and `=` that holds a Unicode letter, a Unicode digit or the character `_`, so `<div @click="x">` warns. Autolinks such as `<https://example.com>` and prose such as `a <b + c` are not tags. A tag still open at the end of the file, such as `<div class="x"`, has no closing `>` and does not warn |
 
@@ -234,7 +234,7 @@ The default validation requests two documents: `https://<host>/llms.txt` and `ht
 
 **DNS resolution is not checked for private addresses.** A syntactically public domain can resolve to a private IP, so if you expose this package through a service that accepts untrusted domains, enforce private-address restrictions at the network layer. Local and CI runs use their own network policy. The hosted validator runs on the Cloudflare edge.
 
-For vulnerability reporting and supported versions, see [SECURITY.md](https://github.com/erekola/llms-txt-validator/blob/main/SECURITY.md).
+For vulnerability reporting and supported versions, see [SECURITY.md](https://github.com/turva-dev/llms-txt-validator/blob/main/SECURITY.md).
 
 ## Release process
 
@@ -246,24 +246,24 @@ GitHub Actions tests Node.js 22, 24 and 26 on Ubuntu and Node.js 22 on Windows. 
 
 Up to 0.3.21 the package was plain JavaScript modules, starting with `src/index.mjs`. Version 0.4.0, released on 21 October 2026, ports it to TypeScript compiled to `dist/`, and the entry point moved to `dist/src/index.js` behind the same `exports` name. The compiled library has the same 12 493 JavaScript tokens as 0.3.21, apart from the relative path to `package.json`. A differential run fed both versions 4 160 000 generated `llms.txt` inputs and 832 000 HTML heads and found no difference. The CLI kept its flags, its output and its exit codes.
 
-The strict type check found two inputs that could leave `undefined` in a check's detail. Neither `fetchLlmsTxt` nor `validateHost` produces them, and 0.4.1 fixed both. Each release is described in [CHANGELOG.md](https://github.com/erekola/llms-txt-validator/blob/main/CHANGELOG.md).
+The strict type check found two inputs that could leave `undefined` in a check's detail. Neither `fetchLlmsTxt` nor `validateHost` produces them, and 0.4.1 fixed both. Each release is described in [CHANGELOG.md](https://github.com/turva-dev/llms-txt-validator/blob/main/CHANGELOG.md).
 
 ## Verify a release
 
 GitHub Actions publishes every version from 0.1.3 on with npm trusted publishing, and each one carries a provenance attestation. To check one, install it in an empty directory and ask npm to verify the signatures. Replace the version with the one you want to check.
 
 ```sh
-mkdir verify-llms && cd verify-llms && npm init -y && npm install turva-llms-txt-validator@0.8.4 --ignore-scripts && npm audit signatures
+mkdir verify-llms && cd verify-llms && npm init -y && npm install turva-llms-txt-validator@0.8.5 --ignore-scripts && npm audit signatures
 ```
 
-`npm audit signatures` checks the registry signature and the provenance attestation of each installed package that has one. The attestation of this package names three things to compare with what you expect: the repository `github.com/erekola/llms-txt-validator`, the workflow file `.github/workflows/publish.yml` and the commit that produced the tarball. The npm version page shows them under Provenance.
+`npm audit signatures` checks the registry signature and the provenance attestation of each installed package that has one. The attestation of this package names three things to compare with what you expect: the repository, the workflow file `.github/workflows/publish.yml` and the commit that produced the tarball. Versions up to and including 0.8.4 were built in `github.com/erekola/llms-txt-validator`, before the repository moved to the turva-dev organization on 2026-11-25. Every later release is built in `github.com/turva-dev/llms-txt-validator`. The npm version page shows them under Provenance.
 
-Tag `v0.8.4` must point at that same commit, and `gh api repos/erekola/llms-txt-validator/commits/v0.8.4 --jq .sha` prints it. A mismatch is a reason not to use that version. Provenance proves which workflow built a release and from which commit. It does not prove that the code is safe, so reading the source and the dependencies stays your job.
+Tag `v0.8.5` must point at that same commit, and `gh api repos/turva-dev/llms-txt-validator/commits/v0.8.5 --jq .sha` prints it. A mismatch is a reason not to use that version. Provenance proves which workflow built a release and from which commit. It does not prove that the code is safe, so reading the source and the dependencies stays your job.
 
 ## Development
 
 ```sh
-git clone https://github.com/erekola/llms-txt-validator.git
+git clone https://github.com/turva-dev/llms-txt-validator.git
 cd llms-txt-validator
 npm ci --ignore-scripts
 npm run typecheck
@@ -274,7 +274,7 @@ npm test
 
 ## Hosted version and source
 
-The [hosted validator](https://turva.dev/llms-txt-validator) accepts any public domain in the browser. For any host other than turva.dev itself it requests the same two documents, `/llms.txt` and the home page. For turva.dev it validates the site's own files directly, without a request. The hosted validator reads www.turva.dev the same way and reports https://turva.dev/llms.txt as the target. This package requests www.turva.dev as typed, follows its redirect and reports https://www.turva.dev/llms.txt. It runs the same checks. Its source is in the [turva.dev Cloudflare Worker](https://github.com/erekola/turva-worker). The hosted validator is the canonical implementation: if results diverge, this package is updated to match it.
+The [hosted validator](https://turva.dev/llms-txt-validator) accepts any public domain in the browser. For any host other than turva.dev itself it requests the same two documents, `/llms.txt` and the home page. For turva.dev it validates the site's own files directly, without a request. The hosted validator reads www.turva.dev the same way and reports https://turva.dev/llms.txt as the target. This package requests www.turva.dev as typed, follows its redirect and reports https://www.turva.dev/llms.txt. It runs the same checks. Its source is in the [turva.dev Cloudflare Worker](https://github.com/turva-dev/turva-worker). The hosted validator is the canonical implementation: if results diverge, this package is updated to match it.
 
 The hosted version also returns JSON with the same result shape for a completed validation. Its errors are shaped differently: an `error` field, plus a `docs` link when the `url` parameter is missing, with HTTP status 400 and no `target`. The site-wide rate limiter can also answer HTTP 429 as plain text, with a `Retry-After` header, before the validator runs, and that answer is not JSON.
 
@@ -288,13 +288,13 @@ In Windows PowerShell, use `curl.exe` if `curl` resolves to `Invoke-WebRequest`.
 
 ## Check HTML and Markdown content
 
-[markdown-parity-check](https://github.com/erekola/markdown-parity-check) is a separate tool for a different question. This validator reads the structure of `llms.txt` and the home page's discovery links. The parity check compares the main content of one page's HTML and Markdown versions and reports changed text, numbers, links or blocks. It requires Node.js 22 or newer:
+[markdown-parity-check](https://github.com/turva-dev/markdown-parity-check) is a separate tool for a different question. This validator reads the structure of `llms.txt` and the home page's discovery links. The parity check compares the main content of one page's HTML and Markdown versions and reports changed text, numbers, links or blocks. It requires Node.js 22 or newer:
 
 ```sh
 npx --yes markdown-parity-check --url https://example.com/page --format json
 ```
 
-Replace the URL with your page. If Markdown is served at another address, add `--markdown-url https://example.com/page.md`. Its [browser version](https://turva.dev/markdown-parity-check) on turva.dev checks turva.dev's own pages only. See the [comparison README](https://github.com/erekola/markdown-parity-check) for local-file mode, exit codes and limits.
+Replace the URL with your page. If Markdown is served at another address, add `--markdown-url https://example.com/page.md`. Its [browser version](https://turva.dev/markdown-parity-check) on turva.dev checks turva.dev's own pages only. See the [comparison README](https://github.com/turva-dev/markdown-parity-check) for local-file mode, exit codes and limits.
 
 ## License
 

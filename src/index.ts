@@ -1,7 +1,7 @@
 // turva-llms-txt-validator: validate a site's llms.txt structure.
 // The checks mirror the hosted validator at https://turva.dev/llms-txt-validator,
 // which runs this same logic inside the turva.dev Cloudflare Worker
-// (https://github.com/erekola/turva-worker). The hosted validator stays
+// (https://github.com/turva-dev/turva-worker). The hosted validator stays
 // canonical: if the two ever disagree, the hosted one wins and this package
 // gets the fix. No tool compares the two sources: the mirror is kept by hand, and the
 // test files of the two repos carry the same inputs and expectations by hand too.
@@ -1854,6 +1854,13 @@ export function validateLlmsTxt(f: LlmsTxtInput): LlmsCheck[] {
   }
   // A list line that looks like a link entry but is not one (Tek-730) turns the links check to a warn.
   const lookalikes = unparsedLinkEntries(lines, fenced, new Set(proseLinks.map((m) => m.at)), codeSpanMask(linkText, linkBlocks), defAt, htmlLine);
+  // A truncated read can end inside a list line, so that last line is left out of this check:
+  // calling a line malformed when the read cut it is unsupported (0.8.5, mirrors the hosted validator).
+  if (f.truncated) {
+    const cut = lines.length;
+    lookalikes.unparsed = lookalikes.unparsed.filter((n) => n !== cut);
+    lookalikes.marker = lookalikes.marker.filter((n) => n !== cut);
+  }
   if (lookalikes.unparsed.length + lookalikes.marker.length > 0) {
     const lk = checks[checks.length - 1]!;
     lk.status = "warn";
